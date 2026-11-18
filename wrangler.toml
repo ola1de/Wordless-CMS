@@ -1,0 +1,27 @@
+# WORDLESS — Cloudflare Workers configuration (Milestone 1).
+# No secrets in this file. D1/KV ids are placeholders until the user
+# connects a Cloudflare account (see README.md). Run `wrangler login`
+# and `wrangler d1 create wordless` / `wrangler kv namespace create CONFIG`
+# then replace the REPLACE-ME values below.
+
+name = "wordless"
+main = "src/index.ts"
+# Compatibility date: 2026-11-18 (not 2026-11-19) because Wrangler rejects a
+# date in the future relative to the machine clock, and this was authored
+# while the system clock was still 2026-11-18 UTC. Safe to bump forward
+# once that date has passed everywhere; behaviour is identical for M1.
+compatibility_date = "2026-11-18"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wordless"
+database_id = "REPLACE-ME"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "wordless-media"
+
+[[kv_namespaces]]
+binding = "CONFIG"
+id = "REPLACE-ME"

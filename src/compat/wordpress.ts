@@ -1,0 +1,197 @@
+/**
+ * WordPress compatibility registry — the bridge converted extensions call.
+ *
+ * Each entry records an honest support level for Milestone 1:
+ * - full:    implemented with WordPress semantics (sync hooks).
+ * - partial: implemented for the common path; documented gaps remain.
+ * - stub:    recorded/thrown, not functional yet — never silently faked.
+ *
+ * The callable API is built by createWordPressApi(db, ctx). Unlike PHP,
+ * the data functions are async (they hit D1); converted extensions must
+ * await them. The snake_case names match WordPress so converted code
+ * reads naturally.
+ *
+ * NOTE: the brief listed get_user_meta twice; the 25th entry here is
+ * add_option (a real WP function) so the registry has 25 distinct names.
+ */
+import { execRun, nowIso } from "../db";
+import type { Db } from "../db";
+import { stubError, WordlessError } from "../kernel/errors";
+import { applyFilters, doAction, hooks } from "../kernel/hooks";
+import type { HookCallback } from "../kernel/hooks";
+import { userCan, type Role } from "../modules/users/capabilities";
+import { getUserMeta, updateUserMeta } from "../modules/users/service";
+import type { User } from "../modules/users/types";
+import { deleteOption, addOption, getOption, setOption } from "../modules/options/service";
+import {
+  createPost,
+  deletePost,
+  getPostById,
+  getPostBySlug,
+  listPosts,
+  updatePost,
+} from "../modules/posts/service";
+import type { CreatePostInput, Post, PostListResult, UpdatePostInput } from "../modules/posts/types";
+import { isPostStatus } from "../modules/posts/types";
+
+export type SupportLevel = "full" | "partial" | "stub" | "unsupported";
+
+export interface CompatEntry {
+  name: string;
+  level: SupportLevel;
+  description: string;
+}
+
+export const WORDPRESS_COMPAT: CompatEntry[] = [
+  { name: "get_option", level: "partial", description: "Reads wp_options; values are JSON, not PHP-serialized. No autoload/transient handling yet." },
+  { name: "update_option", level: "partial", description: "Upserts wp_options as JSON. No autoload/transient handling yet." },
+  { name: "delete_option", level: "partial", description: "Deletes from wp_options. Returns whether a row was removed." },
+  { name: "add_option", level: "partial", description: "Inserts only if absent; returns false when the option already exists." },
+  { name: "get_post", level: "partial", description: "Reads wp_posts by ID. No WP_Post object extras (no filtered content, no meta preloading)." },
+  { name: "get_posts", level: "partial", description: "Basic list (status/type/author/page/per_page). No WP_Query taxonomy/meta queries yet." },
+  { name: "wp_insert_post", level: "partial", description: "Creates a post/page/attachment row with slug generation. No hooks fired yet; no meta input handling." },
+  { name: "wp_update_post", level: "partial", description: "Updates allowlisted fields. No revision is created yet (revisions arrive in Phase 3)." },
+  { name: "wp_delete_post", level: "partial", description: "Trashes by default; force=true hard-deletes the row and its postmeta." },
+  { name: "add_action", level: "full", description: "Sync hook registration, priority order (default 10), stable order." },
+  { name: "remove_action", level: "full", description: "Removes by callback identity, optionally scoped to a priority." },
+  { name: "add_filter", level: "full", description: "Sync filter registration, priority order (default 10), stable order." },
+  { name: "remove_filter", level: "full", description: "Removes by callback identity, optionally scoped to a priority." },
+  { name: "apply_filters", level: "full", description: "Chains a value through registered filters in priority order." },
+  { name: "do_action", level: "full", description: "Runs registered action callbacks in priority order." },
+  { name: "register_post_type", level: "partial", description: "Registers in memory only (not persisted, no admin UI, no rewrite rules yet)." },
+  { name: "register_taxonomy", level: "partial", description: "Registers in memory only (not persisted, no term UI yet)." },
+  { name: "add_shortcode", level: "partial", description: "Registers the tag and callback in memory; shortcode rendering in post content is not built yet." },
+  { name: "wp_schedule_event", level: "partial", description: "Persists a scheduled job row in wl_jobs; no cron runner executes it yet (Workers Cron Triggers, Phase 6)." },
+  { name: "current_user_can", level: "partial", description: "Checks the capability map for the current request user; false when anonymous." },
+  { name: "get_user_meta", level: "partial", description: "Reads wp_usermeta as JSON; single-value only (no multi-value arrays yet)." },
+  { name: "update_user_meta", level: "partial", description: "Upserts wp_usermeta as JSON." },
+  { name: "wp_enqueue_script", level: "partial", description: "Records the handle/src in memory; scripts are not rendered into pages yet." },
+  { name: "wp_enqueue_style", level: "partial", description: "Records the handle/src in memory; styles are not rendered into pages yet." },
+  { name: "register_rest_route", level: "stub", description: "STUB: routes are recorded for reporting but NOT mounted on the Worker router in M1." },
+];
+
+/** In-memory registries for converted extensions (not persisted in M1). */
+export const registeredPostTypes = new Map<string, Record<string, unknown>>();
+export const registeredTaxonomies = new Map<string, Record<string, unknown>>();
+export const registeredShortcodes = new Map<string, (...args: unknown[]) => unknown>();
+export const enqueuedScripts: { handle: string; src: string }[] = [];
+export const enqueuedStyles: { handle: string; src: string }[] = [];
+export const registeredRestRoutes: { namespace: string; route: string; methods: string[] }[] = [];
+
+export interface WpContext {
+  db: Db;
+  currentUser: User | null;
+}
+
+export interface WordPressApi {
+  get_option<T>(name: string, defaultValue: T): Promise<T>;
+  update_option(name: string, value: unknown): Promise<void>;
+  delete_option(name: string): Promise<boolean>;
+  add_option(name: string, value: unknown): Promise<boolean>;
+  get_post(id: number): Promise<Post | null>;
+  get_posts(args?: { status?: string; type?: string; authorId?: number; page?: number; perPage?: number }): Promise<PostListResult>;
+  wp_insert_post(input: CreatePostInput): Promise<Post>;
+  wp_update_post(id: number, patch: UpdatePostInput): Promise<Post>;
+  wp_delete_post(id: number, force?: boolean): Promise<boolean>;
+  add_action(tag: string, cb: HookCallback, priority?: number, acceptedArgs?: number): void;
+  remove_action(tag: string, cb: HookCallback, priority?: number): boolean;
+  add_filter(tag: string, cb: HookCallback, priority?: number, acceptedArgs?: number): void;
+  remove_filter(tag: string, cb: HookCallback, priority?: number): boolean;
+  apply_filters(tag: string, value: unknown, ...args: unknown[]): unknown;
+  do_action(tag: string, ...args: unknown[]): void;
+  register_post_type(name: string, args?: Record<string, unknown>): void;
+  register_taxonomy(name: string, objectType: string | string[], args?: Record<string, unknown>): void;
+  add_shortcode(tag: string, cb: (...args: unknown[]) => unknown): void;
+  wp_schedule_event(timestamp: number, recurrence: string, hook: string, args?: unknown[]): Promise<string>;
+  current_user_can(capability: string): boolean;
+  get_user_meta<T>(userId: number, key: string, defaultValue: T): Promise<T>;
+  update_user_meta(userId: number, key: string, value: unknown): Promise<void>;
+  wp_enqueue_script(handle: string, src: string): void;
+  wp_enqueue_style(handle: string, src: string): void;
+  register_rest_route(namespace: string, route: string, methods?: string[]): void;
+}
+
+export function createWordPressApi(ctx: WpContext): WordPressApi {
+  const { db } = ctx;
+  return {
+    get_option: <T>(name: string, defaultValue: T) => getOption<T>(db, name, defaultValue),
+    update_option: (name: string, value: unknown) => setOption(db, name, value),
+    delete_option: (name: string) => deleteOption(db, name),
+    add_option: (name: string, value: unknown) => addOption(db, name, value),
+
+    get_post: (id: number) => getPostById(db, id),
+    get_posts: (args = {}) =>
+      listPosts(db, {
+        status: args.status !== undefined && isPostStatus(args.status) ? args.status : undefined,
+        type: args.type,
+        authorId: args.authorId,
+        page: args.page,
+        perPage: args.perPage,
+      }),
+    wp_insert_post: (input: CreatePostInput) => createPost(db, input),
+    wp_update_post: (id: number, patch: UpdatePostInput) => updatePost(db, id, patch),
+    wp_delete_post: async (id: number, force = false) => {
+      if (force) return deletePost(db, id);
+      const post = await getPostById(db, id);
+      if (!post) throw new WordlessError("not_found", 404, `Post ${id} not found.`);
+      await updatePost(db, id, { status: "trash" });
+      return true;
+    },
+
+    add_action: (tag, cb, priority = 10, acceptedArgs = 0) => hooks.addAction(tag, cb, priority, acceptedArgs),
+    remove_action: (tag, cb, priority) => hooks.removeAction(tag, cb, priority),
+    add_filter: (tag, cb, priority = 10, acceptedArgs = 0) => hooks.addFilter(tag, cb, priority, acceptedArgs),
+    remove_filter: (tag, cb, priority) => hooks.removeFilter(tag, cb, priority),
+    apply_filters: (tag, value, ...args) => applyFilters(tag, value, ...args),
+    do_action: (tag, ...args) => doAction(tag, ...args),
+
+    register_post_type: (name, args = {}) => {
+      registeredPostTypes.set(name, args);
+    },
+    register_taxonomy: (name, _objectType, args = {}) => {
+      registeredTaxonomies.set(name, args);
+    },
+    add_shortcode: (tag, cb) => {
+      registeredShortcodes.set(tag, cb);
+    },
+
+    wp_schedule_event: async (timestamp, recurrence, hook, args = []) => {
+      const id = crypto.randomUUID();
+      const runAt = new Date(timestamp * 1000).toISOString();
+      await execRun(
+        db,
+        `INSERT INTO wl_jobs (id, kind, status, payload, attempts, created_at, updated_at, run_at)
+         VALUES (?, 'cron', 'scheduled', ?, 0, ?, ?, ?)`,
+        [id, JSON.stringify({ hook, recurrence, args }), nowIso(), nowIso(), runAt],
+      );
+      return id;
+    },
+
+    current_user_can: (capability: string) => {
+      if (!ctx.currentUser) return false;
+      return userCan(ctx.currentUser, capability);
+    },
+    get_user_meta: <T>(userId: number, key: string, defaultValue: T) =>
+      getUserMeta<T>(db, userId, key, defaultValue),
+    update_user_meta: (userId: number, key: string, value: unknown) =>
+      updateUserMeta(db, userId, key, value),
+
+    wp_enqueue_script: (handle, src) => {
+      enqueuedScripts.push({ handle, src });
+    },
+    wp_enqueue_style: (handle, src) => {
+      enqueuedStyles.push({ handle, src });
+    },
+    register_rest_route: (namespace, route, methods = ["GET"]) => {
+      registeredRestRoutes.push({ namespace, route, methods });
+      throw stubError(`register_rest_route (${namespace}${route}) — recorded but not mounted in M1`);
+    },
+  };
+}
+
+/** Look up a compat entry by its WordPress name. */
+export function compatEntry(name: string): CompatEntry | undefined {
+  return WORDPRESS_COMPAT.find((e) => e.name === name);
+}
+
+export type { Role };

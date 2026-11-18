@@ -1,0 +1,23 @@
+{
+  "description": "WORDLESS — autonomous website operating system. PHP-independent, WordPress-compatible CMS on Cloudflare Workers (TypeScript). Milestone 1: foundations.",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261118.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  },
+  "name": "wordless",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "setup": "node scripts/install.mjs",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
