@@ -37,6 +37,16 @@ cover; the honest limits for each milestone live in `README.md` and
   (`shell: true`) on Windows only, with arguments quoted (MSVC rules)
   because Node concatenates them unescaped with a shell (DEP0190).
   Found and proven from a real Windows install attempt (Node 24.16.0).
+- **Remote seed fix:** `npm run seed-admin -- --remote` ran
+  `wrangler d1 execute DB --remote` without `--env`, so it hit the
+  top-level D1 binding whose `database_id` is still the REPLACE-ME
+  placeholder — Wrangler failed with "Invalid uuid" (code 7400) and
+  the live database never got an administrator, which is why the
+  first production sign-in failed with "Invalid login or password".
+  The seed script now passes `--env production` by default for
+  remote seeds (`--env staging` for staging) and validates the name,
+  matching what `deploy.mjs` already does. Found from a real
+  production deploy attempt (Node 24.16.0, Wrangler 4.165.0).
 
 ## 1.0.0 — 2026-11-19 (Milestone 10: Production readiness)
 

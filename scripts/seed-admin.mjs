@@ -13,7 +13,13 @@
  *   npm run seed-admin -- --login admin --email a@example.com --password '…' --confirm '…'
  *                                                     Fully non-interactive (CI / scripts)
  *   npm run seed-admin -- --remote ...              Remote D1 (requires `wrangler whoami`
- *                                                     to succeed first + an extra confirmation)
+ *                                                     to succeed first + an extra confirmation).
+ *                                                     Targets the production environment by
+ *                                                     default; `--env staging` seeds staging.
+ *                                                     (The top-level D1 binding still carries
+ *                                                     the REPLACE-ME placeholder id, so remote
+ *                                                     commands must pass --env or Wrangler
+ *                                                     fails with "Invalid uuid", code 7400.)
  *
  * The script refuses to run when an administrator already exists and
  * prints how to use password reset instead. It writes exactly the rows
@@ -37,6 +43,18 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ARGS = process.argv.slice(2);
 const REMOTE = ARGS.includes("--remote");
+const KNOWN_ENVS = new Set(["staging", "production"]);
+
+/** Read one --flag value (or null when absent). */
+function flag(name) {
+  const i = ARGS.indexOf(name);
+  return i >= 0 && i + 1 < ARGS.length ? ARGS[i + 1] : null;
+}
+
+// Remote seeds target the provisioned environment: the top-level D1
+// binding still carries the REPLACE-ME placeholder id, so a remote
+// command without --env fails with "Invalid uuid" (code 7400).
+const ENV = flag("--env") ?? (REMOTE ? "production" : null);
 
 const MIN_PASSWORD = 8;
 const MAX_PASSWORD = 200;
@@ -52,12 +70,6 @@ function ok(msg) {
 }
 function log(msg = "") {
   console.log(msg);
-}
-
-/** Read one --flag value (or null when absent). */
-function flag(name) {
-  const i = ARGS.indexOf(name);
-  return i >= 0 && i + 1 < ARGS.length ? ARGS[i + 1] : null;
 }
 
 /** Quote one argument for a Windows shell command line (MSVC rules). */
@@ -177,7 +189,7 @@ function sqlStr(s) {
 }
 
 function d1Args() {
-  return REMOTE ? ["--remote"] : ["--local"];
+  return REMOTE ? ["--remote", "--env", ENV] : ["--local"];
 }
 
 /** Run one D1 statement and return the parsed --json rows (or fail). */
@@ -207,10 +219,15 @@ function d1ExecFile(path, what) {
 
 async function main() {
   if (ARGS.includes("--help") || ARGS.includes("-h")) {
-    log("Usage: npm run seed-admin [-- --login <login> --email <email> --password <pw> --confirm <pw>] [--remote]");
+    log("Usage: npm run seed-admin [-- --login <login> --email <email> --password <pw> --confirm <pw>] [--remote [--env staging|production]]");
     log("  Creates the first administrator. Refuses when one already exists.");
     log("  Local D1 by default; --remote needs a Cloudflare login (`wrangler whoami`).");
+    log("  --remote targets the production environment by default; use --env staging for staging.");
     return;
+  }
+
+  if (ENV !== null && !KNOWN_ENVS.has(ENV)) {
+    fail(`Unknown environment "${ENV}". Use --env staging or --env production.`);
   }
 
   log("\n  WORDLESS — seed the first administrator\n");
@@ -221,7 +238,7 @@ async function main() {
       fail("Not logged in to Cloudflare (`wrangler whoami` failed). Run `npx wrangler login` first, or seed locally (without --remote).");
     }
     ok("Logged in to Cloudflare (remote seed).");
-    if (!(await confirm("Create the administrator on the REMOTE database?"))) {
+    if (!(await confirm(`Create the administrator on the REMOTE database (${ENV})?`))) {
       log("  Cancelled. Nothing was changed.");
       return;
     }
