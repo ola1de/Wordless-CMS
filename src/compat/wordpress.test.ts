@@ -57,3 +57,32 @@ describe("media compat functions (M3)", () => {
     }
   });
 });
+
+describe("conversion compat functions (M4)", () => {
+  it("registers the seven conversion functions as partial", () => {
+    for (const name of ["get_user_locale", "get_locale", "__", "_e", "esc_html", "esc_attr", "wptexturize"]) {
+      const entry = WORDPRESS_COMPAT.find((e) => e.name === name);
+      expect(entry).toBeDefined();
+      expect(entry?.level).toBe("partial");
+    }
+  });
+
+  it("reads the locale from the context and texturizes", () => {
+    const { db, close } = createTestDb();
+    try {
+      const api = createWordPressApi({ db, currentUser: null, locale: "fr_FR" });
+      expect(api.get_locale()).toBe("fr_FR");
+      expect(api.get_user_locale()).toBe("fr_FR");
+      expect(api.__("Hello")).toBe("Hello");
+      expect(api._e("Hello")).toBe("Hello");
+      expect(api.esc_html("<b>")).toBe("&lt;b&gt;");
+      expect(api.esc_attr('a"b')).toBe("a&quot;b");
+      expect(api.wptexturize("Hello...")).toBe("Hello…");
+      expect(api.wptexturize("You're goin'")).toBe("You’re goin’");
+      const fallback = createWordPressApi({ db, currentUser: null });
+      expect(fallback.get_locale()).toBe("en_US");
+    } finally {
+      close();
+    }
+  });
+});

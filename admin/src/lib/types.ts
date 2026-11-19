@@ -158,3 +158,47 @@ export interface UserList {
   perPage: number;
   totalPages: number;
 }
+
+export interface ConversionReport {
+  source: { filename: string; bytes: number; lines: number };
+  filesProcessed: number;
+  ast: { nodes: number; functions: number; classes: number; hooks: number };
+  converted: { functions: string[]; hooks: { tag: string; kind: string; functionName: string }[] };
+  unconverted: { kind: string; name?: string; reason: string; line: number }[];
+  warnings: string[];
+  transformed: { what: string; note: string }[];
+  output: { filename: string; bytes: number; code: string };
+  extension: { slug: string; name: string; version: string };
+  durationMs: number;
+}
+
+export interface ConversionJob {
+  id: string;
+  status: "pending" | "running" | "done" | "failed";
+  filename: string;
+  fixture?: string;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  report?: ConversionReport;
+  error?: string;
+}
+
+export interface ConversionJobList {
+  jobs: ConversionJob[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface ExtensionRecord {
+  slug: string;
+  name: string;
+  kind: string;
+  version: string;
+  status: string;
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -3,7 +3,14 @@
  * `{ ok, data, error }`. Same-origin credentials so the session cookie
  * (`wordless_session`) is sent. Throws ApiError on non-OK responses.
  */
-import type { MediaItem, Settings, User } from "./types";
+import type {
+  ConversionJob,
+  ConversionJobList,
+  ExtensionRecord,
+  MediaItem,
+  Settings,
+  User,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -83,5 +90,32 @@ export const api = {
       throw new ApiError(res.status, body.error?.message ?? `Upload failed (${res.status}).`);
     }
     return body.data as MediaItem;
+  },
+
+  /** Conversion jobs (Milestone 4): list, one job, start a fixture job, upload a PHP file. */
+  listConversionJobs(): Promise<ConversionJobList> {
+    return request<ConversionJobList>("/api/conversion/jobs");
+  },
+  getConversionJob(id: string): Promise<ConversionJob> {
+    return request<ConversionJob>(`/api/conversion/jobs/${encodeURIComponent(id)}`);
+  },
+  startFixtureJob(fixture: string): Promise<ConversionJob> {
+    return request<ConversionJob>("/api/conversion/jobs", {
+      method: "POST",
+      body: JSON.stringify({ fixture }),
+    });
+  },
+  async uploadPhpFile(file: File): Promise<ConversionJob> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/conversion/jobs", { method: "POST", credentials: "same-origin", body: form });
+    const body = (await res.json()) as Envelope<ConversionJob>;
+    if (!res.ok || !body.ok) {
+      throw new ApiError(res.status, body.error?.message ?? `Conversion failed (${res.status}).`);
+    }
+    return body.data as ConversionJob;
+  },
+  listExtensions(): Promise<ExtensionRecord[]> {
+    return request<ExtensionRecord[]>("/api/extensions");
   },
 };

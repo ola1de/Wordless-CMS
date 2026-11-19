@@ -1,0 +1,28 @@
+{
+  "slug": "hello-dolly",
+  "name": "Hello Dolly",
+  "version": "1.7.2",
+  "author": "Matt Mullenweg",
+  "description": "Converted from the bundled Hello Dolly plugin (WordPress 7.1.5) by the Wordless conversion engine (M4). Shows a random lyric from Hello, Dolly in the admin.",
+  "sourceFile": "hello.php",
+  "generatedBy": "wordless-conversion-m4",
+  "convertedFunctions": [
+    "hello_dolly_get_lyric",
+    "hello_dolly",
+    "dolly_css"
+  ],
+  "hooks": [
+    {
+      "tag": "admin_notices",
+      "kind": "action",
+      "functionName": "hello_dolly"
+    },
+    {
+      "tag": "admin_head",
+      "kind": "action",
+      "functionName": "dolly_css"
+    }
+  ],
+  "unconverted": [],
+  "warnings": []
+}

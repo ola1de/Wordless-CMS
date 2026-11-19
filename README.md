@@ -10,13 +10,15 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 3 — Admin + editor (in development).** The kernel, D1
+> **Status: Milestone 4 — Conversion engine spike (in development).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
-> activity log, compat registry and the React admin SPA with a Gutenberg
-> block editor are built and tested. The conversion engine, AI agents,
-> visual theme editor, commerce and integrations are **not built yet** — see
-> [What M3 is not](#what-milestone-3-is-not) below. Nothing unfinished is
+> activity log, compat registry, the React admin SPA with a Gutenberg
+> block editor, and the PHP→TypeScript conversion engine (lexer, parser,
+> emitter, safety sandbox, async conversion jobs, Hello Dolly end-to-end,
+> Akismet static analysis) are built and tested. The AI agents, visual
+> theme editor, commerce and integrations are **not built yet** — see
+> [What M4 is not](#what-milestone-4-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -105,11 +107,20 @@ src/
     feeds/            RSS 2.0, sitemap, robots.txt
     health/           site health checks (real, per-check pass/fail)
     activity/         wl_audit_log writes + admin list
+    conversion/       conversion jobs in wl_jobs + runConversionJob (M4)
+    extensions/       wl_extensions rows + bundled-extension registry (M4)
+  conversion/         PHP → TypeScript engine: lexer, parser, AST, emitter,
+                      safety sandbox, static analysis (M4)
   compat/
-    wordpress.ts      34-function WP registry, honestly tagged
+    wordpress.ts      41-function WP registry, honestly tagged
   test/
     test-db.ts        in-memory SQLite test helper (tests only)
     fake-storage.ts   in-memory MediaStorage for tests (tests only)
+examples/
+  hello-dolly/        converter output for the bundled Hello Dolly plugin (M4)
+docs/conversion/
+  hello-dolly-report.md   the Hello Dolly conversion report (M4)
+  akismet-analysis.md     static analysis of the bundled Akismet plugin (M4)
 admin/
   vite.config.ts      Vite build → admin/dist/admin/ (base /admin/)
   index.html          SPA entry point
@@ -120,7 +131,8 @@ admin/
     lib/              API client, types, date/permalink helpers
     editor/           Gutenberg block parser/serializer + tests
     pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
-                      Menus, Users, Settings, Site Health, Activity, Login
+                      Menus, Users, Settings, Site Health, Activity, Login,
+                      Conversion (M4)
 migrations/
   0001_init.sql       D1 schema v1: 12 wp_* tables + 6 wl_* tables
   0002_m2.sql         wl_redirects + M2 indexes
@@ -129,7 +141,7 @@ scripts/
   deploy.mjs          production deploy guard
 ```
 
-## API (Milestone 3)
+## API (Milestone 4)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -196,6 +208,10 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `DELETE /api/media/:id` | `upload_files` | Delete R2 object + post + meta |
 | `GET /media/:key` | — | Serve a stored file from R2 (long cache) |
 | `GET /api/options/:key` | logged in | Read one option |
+| `POST /api/conversion/jobs` | `install_plugins` | Start a conversion job (multipart `.php` ≤1 MB, or JSON `{ fixture: "hello-dolly" }`); runs synchronously in local dev, returns the finished job |
+| `GET /api/conversion/jobs` | `install_plugins` | List conversion jobs, paginated |
+| `GET /api/conversion/jobs/:id` | `install_plugins` | One job: status, progress, report or error |
+| `GET /api/extensions` | `install_plugins` | Installed extensions (`wl_extensions`) |
 | `GET /feed` | — | RSS 2.0, latest 20 published posts |
 | `GET /sitemap.xml` | — | Posts + pages + terms with content |
 | `GET /robots.txt` | — | Allow all + sitemap line |
@@ -262,6 +278,110 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   Activity tabs plus a login form; the public site is at `/`.
 - 78 tests, all passing; `tsc --noEmit` clean under `strict`.
 
+## What Milestone 4 is
+
+- **PHP lexer + parser** (`src/conversion/`). A TypeScript tokenizer and
+  recursive-descent parser for the PHP subset real plugins use: `<?php`
+  tags, functions, `add_action`/`add_filter`, `echo`/`print`, strings
+  (single/double, `.` concat, interpolation, heredoc), arrays (`array()`
+  and `[]`), variables, `if/else`/`elseif` chains, `foreach`/`for`/`while`/
+  `do…while`, `switch`, `try/catch`, `return`, comments, `require/include`
+  of literal paths, classes with methods (analysed, not converted), casts
+  (`(int)`, `(string)`…), the spaceship operator (`<=>`), nullable/union
+  parameter types, namespaced names (`WP_CLI\Utils\…`), function-local
+  `static` variables, and the template alternative syntax
+  (`if (…): … endif;`, `foreach (…): … endforeach;` — common in views).
+  Every AST node carries source position; unsupported constructs are
+  recorded as `unsupported` nodes with a reason, never silently dropped.
+  Known gaps: `match` expressions and `fn` arrow functions are not parsed
+  yet (parse error, honestly reported — neither appears in Akismet).
+- **AST → TypeScript emitter** (`src/conversion/emitter.ts`). PHP functions
+  become TS functions taking the WordPress API (`wp`) as the first
+  parameter; `add_action`/`add_filter` become hook registrations in
+  `activate(wp)`; `echo`/`printf` output is collected into a returned
+  string; WP functions map through the compat registry where a mapping
+  exists and are flagged `unmapped` otherwise (emitted as a throwing
+  `__unmapped_<name>` helper, listed in the report). Function-local
+  `static` variables are hoisted to module-level `let`s so they persist
+  across calls exactly as PHP statics do. The emitter's output typechecks
+  (tested with `tsc` on the generated Hello Dolly module).
+- **Async conversion jobs** (`src/modules/conversion/`, `wl_jobs` rows of
+  kind `conversion`). `POST /api/conversion/jobs` accepts a multipart PHP
+  file (≤1 MB, `.php` only) or the `hello-dolly` fixture; the job moves
+  `pending` → `running` → `done`/`failed` with a progress percentage and
+  a report (files processed, AST node counts, converted/unconverted counts
+  with reasons, warnings, generated output). Processing runs synchronously
+  inside the request in local dev (a single file converts in ~10 ms);
+  the same `runConversionJob(db, jobId)` is structured to be invoked by a
+  Queue/Workflow consumer later (production path — see ARCHITECTURE.md,
+  no Queues built in M4). A blocked construct fails the job with a clear
+  error, never a partial silent success.
+- **Hello Dolly end-to-end.** The bundled plugin converts cleanly: 3/3
+  functions, 2/2 hooks, 0 unconverted, 0 warnings (one transformation —
+  the ABSPATH guard, removed with a note). The generated extension lives
+  at `examples/hello-dolly/` (generated `index.ts` + `extension.json` +
+  README) and is registered in the extension registry, so a successful
+  fixture job installs it (`wl_extensions`, status `active`) and activates
+  it. Runtime-tested: the hooks register through the kernel and return a
+  lyric line. Full report: `docs/conversion/hello-dolly-report.md`.
+- **Sandbox + safety** (`src/conversion/safety.ts`). The converter REJECTS
+  (job fails with a reason) any source containing `eval`, `exec`,
+  `shell_exec`, `system`, `passthru`, `popen`, `proc_open`,
+  `create_function`, `unserialize`, `parse_str`/`mb_parse_str`, `assert`,
+  backtick execution, or a dynamic `include`/`require` of a non-literal
+  path. The scan is token-based, so blocked words inside strings or
+  comments do not trip it. **No PHP is ever executed** — there is no PHP
+  runtime in Wordless at all — and converted code runs only through the
+  Wordless extension API with the same capability checks as any extension.
+  No dynamic code loading, no shelling out.
+- **Akismet analysis (NOT a conversion).** The bundled Akismet plugin was
+  run through the parser file by file: 29 files, 7,707 lines, 9
+  convertible / 16 partial / 4 blocked, with per-file features, WordPress
+  APIs, hooks, options and HTTP calls, and an honest effort estimate.
+  `docs/conversion/akismet-analysis.md`. Akismet is NOT converted in M4:
+  its value is an external API and a spam database, not the PHP around
+  them — that is an integration (Phase 8), not a conversion.
+- **Admin Conversion page** (`#/conversion`). Upload a PHP file or pick
+  the Hello Dolly fixture, start a job, watch status/progress, read the
+  report (converted/unconverted/warnings), view the generated code, and
+  see installed extensions. All on the real API.
+- **Compat registry:** 41 function names now — M4 adds `get_user_locale`,
+  `get_locale`, `__`, `_e`, `esc_html`, `esc_attr` and `wptexturize`
+  (all partial; the locale ones read the request's `site_locale` option
+  synchronously, on purpose, so a locale call inside an action callback
+  does not force the whole function async).
+- **No schema change was needed for M4** — job reports live as JSON in
+  the existing `wl_jobs.result` column, so there is no
+  `migrations/0004_m4.sql`.
+- 176 tests, all passing; `tsc --noEmit` clean for the worker and the
+  admin under `strict`.
+
+## What Milestone 4 is not
+
+- **Not universal plugin compatibility.** Hello Dolly converts; Akismet
+  does not (classes, external API, `$wpdb`). The converter handles the
+  procedural PHP subset well and records everything else honestly — never
+  claim a plugin converts until its own report says so.
+- **Not a class runtime.** Classes are analysed (methods, properties,
+  inheritance) but not converted; building a class runtime is a later
+  milestone, and it is the main blocker for real-world plugins.
+- **Not a marketplace.** Installing/activating arbitrary extensions from
+  uploads is Phase 8; M4 only registers the converter's own bundled
+  output (hello-dolly).
+- **Not per-request extension loading.** A successful job activates the
+  bundled extension in the running isolate's hook registry; a cold start
+  does not re-activate it. Loading active extensions at Worker startup is
+  a later milestone.
+- **No Queues/Workflows yet.** The job module is structured for a
+  Queue/Workflow consumer, but production conversion still runs inside
+  the request in M4.
+- **No AI agents.** Provider abstraction, orchestration and the command
+  centre are Phase 6.
+- **No image derivatives.** Uploads store the original file only; resizing
+  and WebP conversion are Phase 7.
+- **No user reassignment on delete.** Deleting a user who owns posts is
+  refused; reassignment is a later milestone.
+
 ## What Milestone 3 is
 
 - **React admin SPA** at `/admin` (Vite + React + TypeScript, plain CSS in
@@ -319,8 +439,9 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 
 - **Not a full theme engine.** The built-in default theme renders the
   site; custom themes are M5.
-- **Not a plugin/theme conversion.** The PHP→TypeScript conversion engine is
-  Phase 4; the compat registry is the foundation for it, not the engine.
+- **Not a plugin/theme conversion.** The PHP→TypeScript conversion engine
+  is Milestone 4 — see [What Milestone 4 is](#what-milestone-4-is); the
+  compat registry was the foundation for it, not the engine.
 - **No AI agents.** Provider abstraction, orchestration and the command
   centre are Phase 6.
 - **No image derivatives.** Uploads store the original file only; resizing

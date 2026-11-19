@@ -1,5 +1,5 @@
 /**
- * WORDLESS — Worker entry point (Milestone 3).
+ * WORDLESS — Worker entry point (Milestone 4).
  * API gateway + public renderer. Routes are registered on the kernel
  * router; handlers call module services, never D1 directly.
  *
@@ -12,6 +12,7 @@
  * served from Static Assets at /admin. API + public-site routes keep
  * priority; asset requests that miss fall back to /admin/index.html.
  */
+import { createWordPressApi } from "./compat/wordpress";
 import { adaptD1, nowIso } from "./db";
 import type { Db } from "./db";
 import type { Env } from "./env";
@@ -19,6 +20,15 @@ import { WordlessError } from "./kernel/errors";
 import { jsonError, jsonOk, readJsonBody, Router } from "./kernel/router";
 import { intInRange, requireString } from "./kernel/validate";
 import { logActivity, listActivity } from "./modules/activity/service";
+import {
+  createConversionJob,
+  getConversionJob,
+  listConversionJobs,
+  runConversionJob,
+} from "./modules/conversion/service";
+import { CONVERSION_FIXTURES, MAX_PHP_BYTES } from "./modules/conversion/types";
+import { bundledExtension } from "./modules/extensions/registry";
+import { installExtension, listExtensions } from "./modules/extensions/service";
 import {
   buildSessionCookie,
   clearSessionCookie,
@@ -109,7 +119,18 @@ import {
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
+
+/**
+ * Pinned upstream source for each conversion fixture. Fixtures fetch from
+ * these URLs at job time so no GPL PHP is ever copied into the repo; the
+ * tag is pinned (6.9.1) so a fixture conversion is reproducible. The local
+ * reference copy (WordPress 7.1.5) differs only in the ABSPATH guard
+ * (`exit;` vs `die();`) — the converter treats both the same way.
+ */
+const FIXTURE_SOURCE_URLS: Record<string, string> = {
+  "hello-dolly": "https://raw.githubusercontent.com/WordPress/WordPress/6.9.1/wp-content/plugins/hello.php",
+};
 
 function htmlResponse(html: string, status = 200): Response {
   return new Response(html, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -743,6 +764,116 @@ function buildRouter(): Router {
       },
     });
   });
+
+  // ------------------------------------------------------------ conversion (M4)
+  // A conversion job runs the static PHP → TypeScript pipeline on one
+  // uploaded file or on the hello-dolly fixture. In local dev the job
+  // runs synchronously inside the request; in production a Queue/Workflow
+  // consumer calls the same runConversionJob(db, jobId). The uploaded PHP
+  // is NEVER executed — see src/conversion/safety.ts.
+  router.post(
+    "/api/conversion/jobs",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const contentType = request.headers.get("Content-Type") ?? "";
+      let input: { filename: string; source?: string; fixture?: string };
+      if (contentType.includes("multipart/form-data")) {
+        const form = await request.formData();
+        const file = form.get("file");
+        if (!(file instanceof File)) {
+          throw new WordlessError("bad_request", 400, 'Upload requires a multipart "file" field.');
+        }
+        input = { filename: file.name, source: await file.text() };
+      } else {
+        const body = await readJsonBody<Record<string, unknown>>(request);
+        if (typeof body.fixture === "string") {
+          input = { filename: "hello.php", fixture: body.fixture };
+        } else {
+          input = {
+            filename: requireString(body.filename, "filename", { max: 200 }),
+            source: requireString(body.source, "source", { max: MAX_PHP_BYTES + 100 }),
+          };
+        }
+      }
+      const created = await createConversionJob(db, input);
+      const locale = await getOption<string>(db, "site_locale", "en_US");
+      const wp = createWordPressApi({ db, currentUser: user ?? null, locale });
+      const finished = await runConversionJob(db, created.id, {
+        resolveFixture: async (fixture) => {
+          const known = CONVERSION_FIXTURES[fixture];
+          if (known === undefined) {
+            throw new WordlessError("bad_request", 400, `Unknown conversion fixture "${fixture}".`);
+          }
+          const sourceUrl = FIXTURE_SOURCE_URLS[fixture];
+          if (sourceUrl === undefined) {
+            throw new WordlessError("bad_request", 400, `Fixture "${fixture}" has no pinned upstream source.`);
+          }
+          const res = await fetch(sourceUrl);
+          if (!res.ok) {
+            throw new WordlessError(
+              "bad_gateway",
+              502,
+              `Could not fetch the ${fixture} fixture source (upstream HTTP ${res.status}). Try uploading the PHP file instead.`,
+            );
+          }
+          return { source: await res.text(), filename: known.filename };
+        },
+        onSuccess: async (report) => {
+          // A bundled extension (hello-dolly) is installed and activated
+          // in this request: the hook registry is a module-level
+          // singleton, so its hooks register for this isolate. A cold
+          // start does not re-activate extensions — per-request extension
+          // loading at Worker startup is a later milestone.
+          const bundled = bundledExtension(report.extension.slug);
+          if (bundled === undefined) return;
+          await installExtension(db, {
+            slug: bundled.slug,
+            name: bundled.name,
+            version: bundled.version,
+            kind: "plugin",
+            source: `conversion:${created.id}`,
+            status: "active",
+          });
+          bundled.activate(wp);
+        },
+      });
+      await log(db, user, "conversion.job", "job", 0);
+      return jsonOk(finished, 201);
+    },
+    { capability: "install_plugins" },
+  );
+
+  router.get(
+    "/api/conversion/jobs",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listConversionJobs(db, { page, perPage }));
+    },
+    { capability: "install_plugins" },
+  );
+
+  router.get(
+    "/api/conversion/jobs/:id",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await getConversionJob(db, params.id ?? ""));
+    },
+    { capability: "install_plugins" },
+  );
+
+  // ------------------------------------------------------------ extensions (M4)
+  // Installed extensions (wl_extensions). The conversion job installs a
+  // bundled extension on success; this list is what the admin shows.
+  router.get(
+    "/api/extensions",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await listExtensions(db));
+    },
+    { capability: "install_plugins" },
+  );
 
   // -------------------------------------------------------------------- auth
   router.post("/api/auth/login", async ({ request, env }) => {

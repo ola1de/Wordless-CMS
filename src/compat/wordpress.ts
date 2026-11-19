@@ -87,6 +87,13 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "get_media_items", level: "partial", description: "Attachment posts, paginated with a MIME filter (M3). Returns MediaRecord objects, not WP_Post objects." },
   { name: "wp_get_attachment_url", level: "partial", description: "Public /media/<key> URL for an attachment id (M3). Empty string when the id is not an attachment." },
   { name: "media_handle_upload", level: "partial", description: "Validates and stores a file in R2, creating the attachment post + postmeta (M3). Needs a MediaStorage in the context; throws a stub error when none is wired. No image derivatives (Phase 7)." },
+  { name: "get_user_locale", level: "partial", description: "The current user's locale: the locale passed in the WpContext (resolved once per request from the site_locale option), default en_US (M4). No per-user locale UI yet." },
+  { name: "get_locale", level: "partial", description: "Site locale from the WpContext (resolved once per request from the site_locale option), default en_US (M4)." },
+  { name: "__", level: "partial", description: "Returns the string unchanged: no translation files exist in M4, so there is nothing to translate from (M4)." },
+  { name: "_e", level: "partial", description: "Returns the string unchanged (same as __); the emitter turns the surrounding echo into output (M4)." },
+  { name: "esc_html", level: "partial", description: "Escapes & < > \" ' for HTML output (M4)." },
+  { name: "esc_attr", level: "partial", description: "Escapes & < > \" ' for attribute output — same escaping as esc_html in M4 (M4)." },
+  { name: "wptexturize", level: "partial", description: "Converts straight quotes to curly quotes, --/--- to dashes, ... to an ellipsis (M4). A small subset of WordPress's full texturize." },
 ];
 
 /** In-memory registries for converted extensions (not persisted in M1). */
@@ -100,6 +107,14 @@ export const registeredRestRoutes: { namespace: string; route: string; methods: 
 export interface WpContext {
   db: Db;
   currentUser: User | null;
+  /**
+   * Site locale for this request (e.g. "en_US"). The Worker resolves it
+   * once per request from the site_locale option; get_locale() and
+   * get_user_locale() are synchronous reads of it, which matters for
+   * converted code — a locale call inside an action callback must not
+   * turn the whole function async (the hook system is synchronous).
+   */
+  locale?: string;
   /**
    * Media storage for media_handle_upload. The Worker passes an
    * R2MediaStorage; tests pass an in-memory fake. Absent → upload throws
@@ -143,6 +158,13 @@ export interface WordPressApi {
   get_media_items(args?: { page?: number; perPage?: number; mimeType?: string }): Promise<MediaListResult>;
   wp_get_attachment_url(id: number): Promise<string>;
   media_handle_upload(input: UploadMediaInput): Promise<MediaRecord>;
+  get_user_locale(): string;
+  get_locale(): string;
+  __(text: string): string;
+  _e(text: string): string;
+  esc_html(text: string): string;
+  esc_attr(text: string): string;
+  wptexturize(text: string): string;
 }
 
 export function createWordPressApi(ctx: WpContext): WordPressApi {
@@ -247,6 +269,17 @@ export function createWordPressApi(ctx: WpContext): WordPressApi {
       }
       return uploadMedia(db, ctx.storage, input);
     },
+    // Locale is request-scoped config passed in the context (see
+    // WpContext.locale) — synchronous on purpose, so a locale call inside
+    // an action callback does not force the callback to be async.
+    get_locale: () => ctx.locale ?? "en_US",
+    get_user_locale: () => ctx.locale ?? "en_US",
+    // No translation files exist in M4: __() returns the string unchanged.
+    __: (text: string) => text,
+    _e: (text: string) => text,
+    esc_html: (text: string) => escapeHtml(text),
+    esc_attr: (text: string) => escapeHtml(text),
+    wptexturize: (text: string) => wptexturize(text),
     wp_nav_menu: async (args = {}) => {
       let items: MenuItem[] = [];
       if (args.theme_location !== undefined) {
@@ -275,6 +308,34 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * wptexturize (M4) — a small, real subset of WordPress's texturize:
+ * ellipsis, em/en dashes, curly double quotes, and apostrophes inside
+ * words. It does not handle every edge case WordPress does (quoted HTML
+ * attributes are left alone only when they are not matched by the quote
+ * patterns); converted plugins that need full fidelity should keep their
+ * own copy of the function.
+ */
+export function wptexturize(text: string): string {
+  return (
+    text
+      // Ellipsis and dashes first (longest first).
+      .replace(/\.\.\./g, "…")
+      .replace(/---/g, "—")
+      .replace(/--/g, "–")
+      // Apostrophe inside a word: You're → You’re, Dolly'll → Dolly’ll.
+      .replace(/([A-Za-z])'([A-Za-z])/g, "$1’$2")
+      // Trailing apostrophe after a word: goin' → goin’.
+      .replace(/([A-Za-z])'(\s|$)/g, "$1’$2")
+      // Paired double quotes on one line: "word" → “word”.
+      .replace(/"([^"\n]+)"/g, "“$1”")
+      // Remaining opening double quote (after space or start) → “.
+      .replace(/(^|[\s(])"/g, "$1“")
+      // Remaining closing double quote → ”.
+      .replace(/"/g, "”")
+  );
 }
 
 /** Look up a compat entry by its WordPress name. */
