@@ -136,6 +136,8 @@ export async function updatePostRow(
 
 export async function deletePostRow(db: Db, id: number): Promise<number> {
   await execRun(db, "DELETE FROM wp_postmeta WHERE post_id = ?", [id]);
+  // Revisions and autosaves belong to the post; they go with it.
+  await execRun(db, "DELETE FROM wp_posts WHERE post_parent = ? AND post_type = 'revision'", [id]);
   const { changes } = await execRun(db, "DELETE FROM wp_posts WHERE ID = ?", [id]);
   return changes;
 }

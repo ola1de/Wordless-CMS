@@ -86,6 +86,18 @@ export class Router {
     this.add("POST", pattern, handler, opts);
   }
 
+  put(pattern: string, handler: RouteHandler, opts: RouteOptions = {}): void {
+    this.add("PUT", pattern, handler, opts);
+  }
+
+  patch(pattern: string, handler: RouteHandler, opts: RouteOptions = {}): void {
+    this.add("PATCH", pattern, handler, opts);
+  }
+
+  delete(pattern: string, handler: RouteHandler, opts: RouteOptions = {}): void {
+    this.add("DELETE", pattern, handler, opts);
+  }
+
   async handle(request: Request, env: Env, user: AuthUser | null): Promise<Response> {
     const url = new URL(request.url);
     const pathSegments = splitPath(url.pathname);

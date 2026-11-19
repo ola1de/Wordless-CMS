@@ -18,6 +18,8 @@ import {
 } from "./repo";
 import type { CreatePostInput, ListPostsOptions, Post, PostListResult, UpdatePostInput } from "./types";
 import { isPostStatus } from "./types";
+import { createRevision } from "../revisions/service";
+import { recordSlugChange } from "../permalinks/service";
 
 /** "Hello, World!" -> "hello-world"; "Café & Bar" -> "cafe-bar"; "" -> "post". */
 export function slugify(text: string): string {
@@ -117,12 +119,21 @@ export async function listPosts(db: Db, opts: ListPostsOptions = {}): Promise<Po
   return { posts, total, page, perPage, totalPages };
 }
 
-export async function updatePost(db: Db, id: number, patch: UpdatePostInput): Promise<Post> {
+export async function updatePost(
+  db: Db,
+  id: number,
+  patch: UpdatePostInput,
+  opts: { skipRevision?: boolean } = {},
+): Promise<Post> {
   const existing = await findPostById(db, id);
   if (!existing) throw notFound(`Post ${id} not found.`);
 
   const sets: string[] = [];
   const params: unknown[] = [];
+  // A revision snapshots the pre-update content whenever the visible
+  // content changes. Trash/restore transitions pass skipRevision.
+  const contentChanged =
+    patch.title !== undefined || patch.content !== undefined || patch.excerpt !== undefined || patch.status !== undefined;
   if (patch.title !== undefined) {
     sets.push("post_title = ?");
     params.push(requireString(patch.title, "title", { max: 1000 }));
@@ -142,8 +153,13 @@ export async function updatePost(db: Db, id: number, patch: UpdatePostInput): Pr
   }
   if (patch.slug !== undefined) {
     const base = slugify(patch.slug);
+    const newSlug = await ensureUniqueSlug(db, base, id);
+    if (newSlug !== existing.slug && existing.status === "publish") {
+      // Record the old permalink so the old URL 301s to the new one.
+      await recordSlugChange(db, existing, newSlug);
+    }
     sets.push("post_name = ?");
-    params.push(await ensureUniqueSlug(db, base, id));
+    params.push(newSlug);
   }
   if (patch.type !== undefined) {
     sets.push("post_type = ?");
@@ -155,6 +171,9 @@ export async function updatePost(db: Db, id: number, patch: UpdatePostInput): Pr
   }
   if (sets.length === 0) return existing;
 
+  if (contentChanged && !opts.skipRevision) {
+    await createRevision(db, existing);
+  }
   const now = nowIso();
   sets.push("post_modified = ?", "post_modified_gmt = ?");
   params.push(now, now);
@@ -165,14 +184,14 @@ export async function updatePost(db: Db, id: number, patch: UpdatePostInput): Pr
 }
 
 export async function trashPost(db: Db, id: number): Promise<Post> {
-  return updatePost(db, id, { status: "trash" });
+  return updatePost(db, id, { status: "trash" }, { skipRevision: true });
 }
 
 export async function restorePost(db: Db, id: number): Promise<Post> {
   const existing = await findPostById(db, id);
   if (!existing) throw notFound(`Post ${id} not found.`);
   if (existing.status !== "trash") return existing;
-  return updatePost(db, id, { status: "draft" });
+  return updatePost(db, id, { status: "draft" }, { skipRevision: true });
 }
 
 /** Permanently delete a post and its postmeta. Irreversible — routes must gate it. */

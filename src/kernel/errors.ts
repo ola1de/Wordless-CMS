@@ -39,6 +39,6 @@ export function stubError(feature: string): WordlessError {
   return new WordlessError(
     "not_implemented",
     501,
-    `STUB: ${feature} is not implemented in Milestone 1. See README.md for the stub list.`,
+    `STUB: ${feature} is not implemented yet. See README.md for the stub list.`,
   );
 }

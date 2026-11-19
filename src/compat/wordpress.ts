@@ -1,7 +1,7 @@
 /**
  * WordPress compatibility registry — the bridge converted extensions call.
  *
- * Each entry records an honest support level for Milestone 1:
+ * Each entry records an honest support level (Milestone 2):
  * - full:    implemented with WordPress semantics (sync hooks).
  * - partial: implemented for the common path; documented gaps remain.
  * - stub:    recorded/thrown, not functional yet — never silently faked.
@@ -23,6 +23,9 @@ import { userCan, type Role } from "../modules/users/capabilities";
 import { getUserMeta, updateUserMeta } from "../modules/users/service";
 import type { User } from "../modules/users/types";
 import { deleteOption, addOption, getOption, setOption } from "../modules/options/service";
+import { listMenuItems, resolveMenuByLocation } from "../modules/menus/service";
+import type { MenuItem } from "../modules/menus/types";
+import { termUrl } from "../modules/permalinks/service";
 import {
   createPost,
   deletePost,
@@ -33,6 +36,10 @@ import {
 } from "../modules/posts/service";
 import type { CreatePostInput, Post, PostListResult, UpdatePostInput } from "../modules/posts/types";
 import { isPostStatus } from "../modules/posts/types";
+import { listRevisions, restoreRevision } from "../modules/revisions/service";
+import type { Revision } from "../modules/revisions/types";
+import { getPostTerms, listTerms } from "../modules/terms/service";
+import type { Term } from "../modules/terms/types";
 
 export type SupportLevel = "full" | "partial" | "stub" | "unsupported";
 
@@ -50,7 +57,7 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "get_post", level: "partial", description: "Reads wp_posts by ID. No WP_Post object extras (no filtered content, no meta preloading)." },
   { name: "get_posts", level: "partial", description: "Basic list (status/type/author/page/per_page). No WP_Query taxonomy/meta queries yet." },
   { name: "wp_insert_post", level: "partial", description: "Creates a post/page/attachment row with slug generation. No hooks fired yet; no meta input handling." },
-  { name: "wp_update_post", level: "partial", description: "Updates allowlisted fields. No revision is created yet (revisions arrive in Phase 3)." },
+  { name: "wp_update_post", level: "partial", description: "Updates allowlisted fields. Creates a revision of the pre-update content (M2)." },
   { name: "wp_delete_post", level: "partial", description: "Trashes by default; force=true hard-deletes the row and its postmeta." },
   { name: "add_action", level: "full", description: "Sync hook registration, priority order (default 10), stable order." },
   { name: "remove_action", level: "full", description: "Removes by callback identity, optionally scoped to a priority." },
@@ -68,6 +75,12 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "wp_enqueue_script", level: "partial", description: "Records the handle/src in memory; scripts are not rendered into pages yet." },
   { name: "wp_enqueue_style", level: "partial", description: "Records the handle/src in memory; styles are not rendered into pages yet." },
   { name: "register_rest_route", level: "stub", description: "STUB: routes are recorded for reporting but NOT mounted on the Worker router in M1." },
+  { name: "wp_get_post_terms", level: "partial", description: "Terms assigned to a post (M2). Returns Term objects; no WP_Term extras." },
+  { name: "get_the_terms", level: "partial", description: "Alias of wp_get_post_terms for one taxonomy (M2)." },
+  { name: "wp_list_categories", level: "partial", description: "HTML list of categories with counts (M2). No Walker/custom args yet." },
+  { name: "wp_get_post_revisions", level: "partial", description: "Revision snapshots for a post, newest first (M2)." },
+  { name: "wp_restore_post_revision", level: "partial", description: "Restores a revision; snapshots the pre-restore content first (M2)." },
+  { name: "wp_nav_menu", level: "partial", description: "HTML for a menu by location or id (M2). No Walker/theme args yet." },
 ];
 
 /** In-memory registries for converted extensions (not persisted in M1). */
@@ -109,6 +122,12 @@ export interface WordPressApi {
   wp_enqueue_script(handle: string, src: string): void;
   wp_enqueue_style(handle: string, src: string): void;
   register_rest_route(namespace: string, route: string, methods?: string[]): void;
+  wp_get_post_terms(postId: number, taxonomy?: string): Promise<Term[]>;
+  get_the_terms(postId: number, taxonomy: string): Promise<Term[]>;
+  wp_list_categories(args?: { taxonomy?: string }): Promise<string>;
+  wp_get_post_revisions(postId: number): Promise<Revision[]>;
+  wp_restore_post_revision(revisionId: number): Promise<Post>;
+  wp_nav_menu(args?: { theme_location?: string; menu?: number }): Promise<string>;
 }
 
 export function createWordPressApi(ctx: WpContext): WordPressApi {
@@ -186,7 +205,49 @@ export function createWordPressApi(ctx: WpContext): WordPressApi {
       registeredRestRoutes.push({ namespace, route, methods });
       throw stubError(`register_rest_route (${namespace}${route}) — recorded but not mounted in M1`);
     },
+
+    wp_get_post_terms: (postId, taxonomy) => getPostTerms(db, postId, taxonomy),
+    get_the_terms: (postId, taxonomy) => getPostTerms(db, postId, taxonomy),
+    wp_list_categories: async (args = {}) => {
+      const { terms } = await listTerms(db, args.taxonomy ?? "category", { perPage: 100 });
+      const items = terms
+        .map(
+          (t) =>
+            `<li class="cat-item"><a href="${termUrl(t.taxonomy, t.slug)}">${escapeHtml(t.name)}</a> (${t.count})</li>`,
+        )
+        .join("");
+      return `<ul>${items}</ul>`;
+    },
+    wp_get_post_revisions: (postId) => listRevisions(db, postId),
+    wp_restore_post_revision: (revisionId) => restoreRevision(db, revisionId),
+    wp_nav_menu: async (args = {}) => {
+      let items: MenuItem[] = [];
+      if (args.theme_location !== undefined) {
+        items = (await resolveMenuByLocation(db, args.theme_location)).items;
+      } else if (args.menu !== undefined) {
+        items = await listMenuItems(db, args.menu);
+      }
+      const renderItems = (list: MenuItem[]): string =>
+        list
+          .map(
+            (item) =>
+              `<li><a href="${escapeHtml(item.url)}">${escapeHtml(item.title)}</a>${
+                item.children && item.children.length > 0 ? `<ul>${renderItems(item.children)}</ul>` : ""
+              }</li>`,
+          )
+          .join("");
+      return `<ul>${renderItems(items)}</ul>`;
+    },
   };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /** Look up a compat entry by its WordPress name. */

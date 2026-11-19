@@ -33,7 +33,7 @@ const BANNER = `
    \\ V  V /   | |_| |  _ <  | |_| | |___| |___ ___) |___) |
     \\_/\\_/     \\___/ |_| \\_\\ |____/|_____|_____|____/|____/
 
-  The autonomous website operating system — Milestone 1
+  The autonomous website operating system — Milestone 2
 `;
 
 function log(msg = "") {

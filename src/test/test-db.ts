@@ -64,8 +64,11 @@ export interface TestDb {
 
 export function createTestDb(): TestDb {
   const sqlite = new DatabaseSync(":memory:");
-  const migrationPath = fileURLToPath(new URL("../../migrations/0001_init.sql", import.meta.url));
-  sqlite.exec(readFileSync(migrationPath, "utf8"));
+  const migration1 = fileURLToPath(new URL("../../migrations/0001_init.sql", import.meta.url));
+  const migration2 = fileURLToPath(new URL("../../migrations/0002_m2.sql", import.meta.url));
+  // Applied in order, exactly as `wrangler d1 migrations apply` does.
+  sqlite.exec(readFileSync(migration1, "utf8"));
+  sqlite.exec(readFileSync(migration2, "utf8"));
   return {
     db: new SqliteDb(sqlite),
     sqlite,
