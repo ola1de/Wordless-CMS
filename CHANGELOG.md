@@ -10,8 +10,8 @@ cover; the honest limits for each milestone live in `README.md` and
 
 ## 1.0.0 — 2026-11-19 (Milestone 10: Production readiness)
 
-**Tests: 417 passed, 4 skipped (421 total, 44 files).** Commit: *pending
-push* (this milestone is built and verified locally; the parent pushes it).
+**Tests: 417 passed, 4 skipped (421 total, 44 files).** Commit: `c1f1a16`
+(pushed 2026-11-19).
 
 - **First-administrator seed** (`npm run seed-admin`): interactive prompts
   or `--login/--email/--password/--confirm` flags; refuses when an
