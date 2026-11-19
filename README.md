@@ -69,6 +69,10 @@ block content.*
 *The shop — products with real minor-unit prices and plain-text
 descriptions.*
 
+![Single product page](docs/screenshots/public-product.png)
+*One product — price, description and add-to-cart, rendered from the
+store data.*
+
 **Admin (`/admin`)**
 
 ![Admin login](docs/screenshots/admin-login.png)
@@ -76,6 +80,9 @@ descriptions.*
 
 ![Admin dashboard](docs/screenshots/admin-dashboard.png)
 *Dashboard — post/comment counts, recent posts and recent activity.*
+
+![Posts list](docs/screenshots/admin-posts.png)
+*Posts — published and draft posts with status and modified date.*
 
 ![Block editor](docs/screenshots/admin-editor.png)
 *The block editor — heading, paragraph and image blocks for a post.*
