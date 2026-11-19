@@ -91,6 +91,11 @@ store data.*
 *Media library with the uploaded image (derivatives unavailable until
 the Cloudflare Images binding is configured).*
 
+![File manager](docs/screenshots/admin-files.png)
+*File manager — every file in the site's storage, with upload, download,
+rename and delete. Managed folders (extensions, themes, backups, imports)
+are read-only here.*
+
 ![AI command centre](docs/screenshots/admin-ai.png)
 *The AI command centre — providers, operating mode, agents, approvals.
 Workers AI reports "not configured" until the `[ai]` binding exists.*
@@ -106,6 +111,11 @@ Workers AI reports "not configured" until the `[ai]` binding exists.*
 
 ![Commerce page](docs/screenshots/admin-commerce.png)
 *Commerce — products, orders, payments, marketplace.*
+
+![Marketplace compatibility report](docs/screenshots/admin-marketplace-report.png)
+*Marketplace — a plugin install's compatibility report and per-file
+auto-conversion record. A plugin is never labelled as working while its
+report shows partial or blocked files.*
 
 ![Import page](docs/screenshots/admin-import.png)
 *WordPress importer — WXR and SQL-dump import.*
