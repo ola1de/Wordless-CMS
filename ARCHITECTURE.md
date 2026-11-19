@@ -359,6 +359,88 @@ src/index.ts  /api/ai/*  (all manage_options)
   `wl_ai_approvals` and `wl_ai_memory`. `REQUIRED_TABLES` in the health
   service and `src/test/test-db.ts` cover both.
 
+## SEO system (M7)
+
+```
+Admin #/seo (Seo.tsx)          Admin #/studio (Studio.tsx)      Admin #/posts/:id/edit (Editor.tsx SEO panel)
+   │  redirects / 404s /          │  calendar / templates /          │  fields + snippet preview
+   │  robots / import             │  ideas (real AI task API)        │  + analysis score
+   ▼                             ▼                                  ▼
+src/index.ts  /api/posts/:id/seo*  +  /api/seo/*  (edit_posts / manage_options / logged in)
+   ├── meta ───────▶ wp_postmeta _wl_seo_*  (getPostSeo / setPostSeo, validated)
+   ├── analyze ────▶ analyzePostSeo (12 deterministic checks → 0–100 score)
+   │                   ▲ used by the M6 seo-auditor agent (src/ai/agents/analysis.ts)
+   ├── head ───────▶ buildPageSeo → render/service.ts finishPage → themedDocument headExtra / layout fallback
+   ├── sitemap ────▶ collectSitemapUrls → sitemapXml (index above 1,000 URLs, page size 1,000, cap 50,000)
+   ├── robots ─────▶ wp_options wl_robots_txt (validateRobotsTxt rejects /admin or /api blocks)
+   ├── redirects ──▶ wl_redirects (M2 table; slug changes already create rows there)
+   ├── notfound ───▶ wl_404_log (migration 0007_m7.sql; query strings stripped; cap 500 paths)
+   ├── studio ─────▶ CONTENT_TEMPLATES (real draft posts) + contentCalendar (stored posts, next 30 days)
+   └── import ─────▶ normalizeMeta (Wordless / Yoast / Rank Math keys) → importSeoMetadata (≤500 rows)
+```
+
+- **Storage.** SEO fields are `wp_postmeta` (keys `_wl_seo_*`), so they
+  travel with the post and the WordPress importer (M9) can map them
+  directly. `robots.txt` is one `wp_options` row (`wl_robots_txt`);
+  the 404 log is the only new table (`wl_404_log`, migration
+  `0007_m7.sql`, additive only).
+- **Head rendering.** `finishPage` in `src/modules/render/service.ts`
+  computes `buildPageSeo` once per public page (kind mapped from the
+  template context, canonical path from the request URL, post loaded
+  when the context carries a `postId`) and hands the title/description
+  and the extra head tags to both the themed renderer and the M2
+  fallback layout, so the tags appear whichever renderer serves the
+  page. `buildPageSeo` returns the page title WITHOUT the site name —
+  the renderer appends it — and returns an empty `headTags` string for
+  nothing: search/404 pages get noindex + no canonical, single posts
+  get Article JSON-LD with the author display name, archives get
+  BreadcrumbList. JSON-LD `<`/`>`/`&` are escaped as `\u003c` etc.
+- **Analysis.** `analyzeSeoContent` is pure (content + fields in,
+  `SeoAnalysis` out) and is tested directly and through the agent.
+  Score formula: `round(100 · (passes + 0.5 · warns) / 12 checks)`.
+  Keyword matching normalises hyphens to spaces so a slug counts as
+  containing the keyword. Flesch reading-ease is computed from the
+  text and labelled an estimate; it is `null` under 10 words. Image
+  alt coverage reads `wp:image {"id":N}` blocks and `<img>` tags in
+  `post_content` — never a live fetch.
+- **Sitemap.** `collectSitemapUrls` walks the same tables as M2
+  (home, published posts/pages, terms with content) and assigns
+  changefreq/priority from type + recency. `sitemapXml(db, page?)`
+  returns a single urlset up to 1,000 URLs and an index above that;
+  a page chunk returns exactly 1,000 `<url>` entries. Image entries
+  come only from attachments that exist (`getMediaRecord`); a post
+  with 11 images contributes 10. The old `sitemapXml`/`robotsTxt` in
+  `src/modules/feeds/service.ts` were removed — the feeds module is
+  RSS-only now.
+- **404 logging.** Hooked in the worker `fetch()` after the public
+  fallback: a GET that returns 404 with a pathname other than `/` is
+  logged via `logNotFound`, which never throws. `normalize404Path`
+  strips query strings and fragments (so tokens/passwords are never
+  stored), decodes, collapses slashes, and skips system paths
+  (`/favicon.ico`, `/api*`, `/admin*`, `/media/`, `/theme.css`,
+  `/feed`, `/sitemap*`, `/robots.txt`). Pruning deletes the least
+  recently seen rows when the count exceeds 500.
+- **Content studio.** `contentCalendar` groups stored posts (any status
+  except trash) by date over the next 30 days — there is no "future"
+  status, so a draft with a future date is the schedule. Templates are
+  static block-comment HTML in `CONTENT_TEMPLATES`; creating from one
+  calls the posts service, so the draft is a real post. Ideas call the
+  M6 `POST /api/ai/tasks` content-writer agent; the studio never
+  invents ideas — with no provider configured it says so and offers
+  the mock for local dev.
+- **Import.** `normalizeMeta` maps the three key families to
+  `PostSeoInput`; `importSeoMetadata` matches by post ID first, then
+  slug, validates each row through `setPostSeo`, and records a
+  per-row skip reason (unknown post, invalid value, no identity).
+  Unknown keys are collected per row and reported; the row still
+  applies its known keys.
+- **Compat.** The SEO HTTP surface is recorded in `SEO_COMPAT` in
+  `src/compat/wordpress.ts` — a separate list from `WORDPRESS_COMPAT`,
+  because these are Wordless-native endpoints, not WordPress functions.
+- **Schema.** Migration `0007_m7.sql` (additive only) adds
+  `wl_404_log`. `REQUIRED_TABLES` in the health service and
+  `src/test/test-db.ts` cover it.
+
 ## Key decisions (see `../docs/02-architecture.md` §10 for the log)
 
 - D1 over KV/Durable Objects for relational data; sessions in D1, not JWT-only.

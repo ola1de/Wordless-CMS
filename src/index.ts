@@ -51,7 +51,15 @@ import {
   userFromSession,
 } from "./modules/auth/service";
 import { createComment, listApprovedThreaded, listComments, setCommentStatus, deleteComment } from "./modules/comments/service";
-import { rssFeed, robotsTxt, sitemapXml } from "./modules/feeds/service";
+import { rssFeed, siteUrl } from "./modules/feeds/service";
+import { getRobotsTxt, setRobotsTxt } from "./modules/seo/robots";
+import { sitemapXml } from "./modules/seo/sitemap";
+import { getPostSeo, setPostSeo } from "./modules/seo/meta";
+import { analyzePostSeo } from "./modules/seo/analyze";
+import { createRedirect, deleteRedirect, listRedirects, updateRedirect } from "./modules/seo/redirects";
+import { deleteNotFound, listNotFound, logNotFound } from "./modules/seo/notfound";
+import { contentCalendar, createFromTemplate, listTemplates } from "./modules/seo/studio";
+import { importSeoMetadata } from "./modules/seo/import";
 import { siteHealth } from "./modules/health/service";
 import {
   addMenuItem,
@@ -85,6 +93,7 @@ import {
 import {
   createPost,
   deletePost,
+  getPostById,
   getPostBySlug,
   listPosts,
   restorePost,
@@ -149,7 +158,7 @@ import {
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -296,13 +305,18 @@ function buildRouter(): Router {
   router.get("/api/posts/:slug", async ({ params, env, user }) => {
     const db = adaptD1(env.DB);
     const slug = params.slug ?? "";
-    const post = await getPostBySlug(db, slug);
-    if (!post) throw new WordlessError("not_found", 404, `No post found with slug "${params.slug}".`);
+    // Numeric "slugs" are post IDs (the editor loads /api/posts/<id>).
+    // This was missing before M7: the editor's load-by-ID 404'd.
+    const post = /^\d+$/.test(slug) ? await getPostById(db, Number(slug)) : await getPostBySlug(db, slug);
+    if (!post || post.status === "trash") {
+      throw new WordlessError("not_found", 404, `No post found with slug "${params.slug}".`);
+    }
     // Drafts and private posts are visible only to logged-in users.
     if (post.status !== "publish" && user === null) {
       throw new WordlessError("unauthorized", 401, "Authentication required to view this post.");
     }
-    return jsonOk(post);
+    // M7: the post detail payload carries its SEO fields.
+    return jsonOk({ ...post, seo: await getPostSeo(db, post.id) });
   });
 
   // --------------------------------------------------------------- revisions
@@ -1092,6 +1106,190 @@ function buildRouter(): Router {
     { capability: "manage_options" },
   );
 
+  // ------------------------------------------------------------------ seo (M7)
+  // Per-post SEO fields (edit_posts), analysis, robots, templates,
+  // calendar, Yoast/Rank Math import, redirects and the 404 log.
+  router.get(
+    "/api/posts/:id/seo",
+    async ({ env, params }) => {
+      return jsonOk(await getPostSeo(adaptD1(env.DB), parseIdParam(params.id, "post id")));
+    },
+    { capability: "edit_posts" },
+  );
+
+  router.put(
+    "/api/posts/:id/seo",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "post id");
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const seo = await setPostSeo(db, id, {
+        title: body.title as string | undefined,
+        description: body.description as string | undefined,
+        focusKeyword: body.focusKeyword as string | undefined,
+        canonical: body.canonical as string | undefined,
+        noindex: body.noindex as boolean | undefined,
+        ogTitle: body.ogTitle as string | undefined,
+        ogDescription: body.ogDescription as string | undefined,
+        ogImageId: body.ogImageId as number | undefined,
+        twitterCard: body.twitterCard as never,
+      });
+      await log(db, user, "seo.update", "post", id);
+      return jsonOk(seo);
+    },
+    { capability: "edit_posts" },
+  );
+
+  router.get(
+    "/api/posts/:id/seo/analysis",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await analyzePostSeo(db, parseIdParam(params.id, "post id"), await siteUrl(db)));
+    },
+    { capability: "edit_posts" },
+  );
+
+  router.get(
+    "/api/seo/robots",
+    async ({ env }) => jsonOk({ robots: await getRobotsTxt(adaptD1(env.DB)) }),
+    { capability: "manage_options" },
+  );
+
+  router.put(
+    "/api/seo/robots",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const robots = await setRobotsTxt(db, requireString(body.robots, "robots", { max: 10000 }));
+      await log(db, user, "seo.robots", "option", 0);
+      return jsonOk({ robots });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/seo/templates",
+    async () => jsonOk(listTemplates()),
+    { capability: "edit_posts" },
+  );
+
+  router.post(
+    "/api/seo/templates/:slug/create",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request).catch(() => ({} as Record<string, unknown>));
+      const post = await createFromTemplate(db, params.slug ?? "", {
+        authorId: user?.id ?? 0,
+        title: typeof body.title === "string" ? body.title : undefined,
+      });
+      await log(db, user, "seo.template_create", "post", post.id);
+      return jsonOk(post, 201);
+    },
+    { capability: "edit_posts" },
+  );
+
+  router.get(
+    "/api/seo/calendar",
+    async ({ env, url }) => {
+      const days = intInRange(url.searchParams.get("days"), "days", 1, 90, 30);
+      return jsonOk(await contentCalendar(adaptD1(env.DB), days));
+    },
+    { requireAuth: true },
+  );
+
+  router.post(
+    "/api/seo/import",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      if (!Array.isArray(body.posts)) {
+        throw new WordlessError("bad_request", 400, 'Import body must be an object with a "posts" array.');
+      }
+      const result = await importSeoMetadata(db, body.posts as never);
+      await log(db, user, "seo.import", "option", 0);
+      return jsonOk(result);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/seo/redirects",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listRedirects(db, { page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/seo/redirects",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const redirect = await createRedirect(db, {
+        oldPath: requireString(body.oldPath, "oldPath", { max: 500 }),
+        newPath: requireString(body.newPath, "newPath", { max: 2000 }),
+      });
+      await log(db, user, "seo.redirect_create", "redirect", redirect.id);
+      return jsonOk(redirect, 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.put(
+    "/api/seo/redirects/:id",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const redirect = await updateRedirect(db, parseIdParam(params.id, "redirect id"), {
+        newPath: requireString(body.newPath, "newPath", { max: 2000 }),
+      });
+      await log(db, user, "seo.redirect_update", "redirect", redirect.id);
+      return jsonOk(redirect);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.delete(
+    "/api/seo/redirects/:id",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "redirect id");
+      const deleted = await deleteRedirect(db, id);
+      await log(db, user, "seo.redirect_delete", "redirect", id);
+      return jsonOk({ deleted });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/seo/404s",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listNotFound(db, { page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.delete(
+    "/api/seo/404s",
+    async ({ url, env, user }) => {
+      const db = adaptD1(env.DB);
+      const path = url.searchParams.get("path");
+      if (path === null || path === "") {
+        throw new WordlessError("bad_request", 400, 'Delete needs a "path" query parameter.');
+      }
+      const deleted = await deleteNotFound(db, path);
+      await log(db, user, "seo.404_delete", "option", 0);
+      return jsonOk({ deleted });
+    },
+    { capability: "manage_options" },
+  );
+
   // ------------------------------------------------------------------ themes (M5)
   // Literal paths are registered before /api/themes/:slug so "active",
   // "import" and "preview" are never read as a slug (first match wins).
@@ -1401,13 +1599,15 @@ function buildRouter(): Router {
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/rss+xml; charset=utf-8" } });
   });
 
-  router.get("/sitemap.xml", async ({ env }) => {
-    const xml = await sitemapXml(adaptD1(env.DB));
+  router.get("/sitemap.xml", async ({ env, url }) => {
+    const pageParam = url.searchParams.get("page");
+    const page = pageParam === null ? undefined : intInRange(pageParam, "page", 1, 100000, 1);
+    const xml = await sitemapXml(adaptD1(env.DB), page);
     return new Response(xml, { status: 200, headers: { "Content-Type": "application/xml; charset=utf-8" } });
   });
 
   router.get("/robots.txt", async ({ env }) => {
-    const txt = await robotsTxt(adaptD1(env.DB));
+    const txt = await getRobotsTxt(adaptD1(env.DB));
     return new Response(txt, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   });
 
@@ -1653,6 +1853,13 @@ export default {
         } else if (request.method === "POST" && url.pathname.endsWith("/comments")) {
           response = await handlePublicCommentPost(request, db, url, user, await renderOpts(db, env, url));
         }
+      }
+
+      // M7: record public 404s (the log strips query strings; the home
+      // page itself is never a 404 even when ?p= misses). Never breaks
+      // the response.
+      if (response.status === 404 && request.method === "GET" && url.pathname !== "/") {
+        await logNotFound(db, url.pathname, request.headers.get("Referer") ?? "");
       }
 
       if (cacheable && response.status === 200) {

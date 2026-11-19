@@ -10,7 +10,7 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 6 — AI operating system (built, in verification).** The kernel, D1
+> **Status: Milestone 7 — content studio + SEO engine (built, in verification).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
@@ -18,12 +18,16 @@ One platform. One intelligent command centre. Complete website management.
 > emitter, safety sandbox, async conversion jobs, Hello Dolly end-to-end,
 > Akismet static analysis), the theme system (theme.json engine,
 > block-theme rendering, ZIP import, classic-theme analysis, customizer
-> with preview + variations), and now the AI operating system (provider
+> with preview + variations), the AI operating system (provider
 > abstraction with **Workers AI as the default provider**, orchestrator
 > with three enforced operating modes, 15 specialist agents, human
-> approvals, website memory, and the AI command centre) are built and
+> approvals, website memory, and the AI command centre), and now the
+> content studio + SEO engine (per-post SEO fields, head tags with
+> JSON-LD, deterministic SEO analysis, sitemap with images + pagination,
+> configurable robots.txt, redirect manager, 404 log, editorial calendar,
+> content templates, Yoast/Rank Math metadata import) are built and
 > tested. Commerce and integrations are **not built yet** — see
-> [What M6 is not](#what-milestone-6-is-not) below. Nothing unfinished is
+> [What M7 is not](#what-milestone-7-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -116,6 +120,10 @@ src/
     extensions/       wl_extensions rows + bundled-extension registry (M4)
     themes/           theme.json engine, templates, ZIP import, classic
                       analysis, variations, preview (M5); wl_themes rows
+    seo/              per-post SEO fields, analysis, head tags, sitemap,
+                      robots, redirects, 404 log, templates, calendar,
+                      Yoast/Rank Math import (M7); wl_404_log rows
+    ai/               AI orchestrator: tasks, approvals, memory (M6)
   conversion/         PHP → TypeScript engine: lexer, parser, AST, emitter,
                       safety sandbox, static analysis (M4)
   compat/
@@ -134,6 +142,10 @@ docs/conversion/
 docs/themes/
   theme-support.md        theme.json v1/v2/v3 matrix + import guide (M5)
   classic-conversion.md   classic-theme conversion report (M5)
+docs/seo/
+  seo.md                  SEO fields, scoring formula, sitemap/robots, what is NOT done (M7)
+docs/ai/
+  agents.md               the 15-agent roster + what each agent measures (M6)
 admin/
   vite.config.ts      Vite build → admin/dist/admin/ (base /admin/)
   index.html          SPA entry point
@@ -145,11 +157,14 @@ admin/
     editor/           Gutenberg block parser/serializer + tests
     pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
                       Menus, Users, Settings, Site Health, Activity, Login,
-                      Conversion (M4), ThemeEditor (M5)
+                      Conversion (M4), ThemeEditor (M5), CommandCentre (M6),
+                      Seo + Studio (M7)
 migrations/
   0001_init.sql       D1 schema v1: 12 wp_* tables + 6 wl_* tables
   0002_m2.sql         wl_redirects + M2 indexes
   0005_m5.sql         wl_themes (M5)
+  0006_m6.sql         wl_ai_approvals + wl_ai_memory (M6)
+  0007_m7.sql         wl_404_log (M7)
 scripts/
   install.mjs         installer wizard (Node built-ins only)
   deploy.mjs          production deploy guard
@@ -157,7 +172,7 @@ scripts/
                       from themes/wordless-default/ (M5; tested for drift)
 ```
 
-## API (Milestone 6)
+## API (Milestone 7)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -175,7 +190,10 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `POST /api/posts/:id/trash` | `delete_posts` | Trash |
 | `POST /api/posts/:id/restore` | `edit_posts` | Restore from trash |
 | `DELETE /api/posts/:id` | `delete_posts` | Hard delete |
-| `GET /api/posts/:slug` | —* | Get one post by slug |
+| `GET /api/posts/:slug` | —* | Get one post by slug; the detail payload includes its `seo` fields |
+| `GET /api/posts/:id/seo` | `edit_posts` | Per-post SEO fields |
+| `PUT /api/posts/:id/seo` | `edit_posts` | Set SEO fields (validated: title ≤70, description ≤160, keyword ≤100, canonical http(s)) |
+| `GET /api/posts/:id/seo/analysis` | `edit_posts` | Deterministic 0–100 SEO analysis from stored content (see `docs/seo/seo.md`) |
 | `GET /api/posts/:id/revisions` | logged in | List revisions |
 | `POST /api/posts/:id/autosave` | `edit_posts` | Create/update the autosave |
 | `GET /api/revisions/:id` | logged in | Get one revision |
@@ -241,8 +259,20 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `POST /api/themes/preview` | `edit_theme_options` | Create a 30-minute preview token for unsaved settings |
 | `GET /theme.css` | — | Active theme stylesheet (`?v=<hash>`; `?wl_preview=<token>` applies preview overrides) |
 | `GET /feed` | — | RSS 2.0, latest 20 published posts |
-| `GET /sitemap.xml` | — | Posts + pages + terms with content |
-| `GET /robots.txt` | — | Allow all + sitemap line |
+| `GET /sitemap.xml` | — | Posts + pages + terms; changefreq/priority from recency, `<lastmod>`, image entries for existing attachments; index + `?page=` above 1,000 URLs |
+| `GET /robots.txt` | — | Configured robots.txt (admin-set) or the default allow-all + sitemap line |
+| `GET /api/seo/robots` | `manage_options` | Current robots.txt |
+| `PUT /api/seo/robots` | `manage_options` | Set robots.txt (rejects rules blocking `/admin` or `/api`) |
+| `GET /api/seo/templates` | `edit_posts` | Content templates (announcement, how-to, news update) |
+| `POST /api/seo/templates/:slug/create` | `edit_posts` | Create a real draft post from a template |
+| `GET /api/seo/calendar` | logged in | Posts grouped by date for the next 30 days (`?days=` 1–90) |
+| `POST /api/seo/import` | `manage_options` | Yoast/Rank Math metadata import, max 500 posts; returns applied/skipped |
+| `GET /api/seo/redirects` | `manage_options` | Redirects, paginated |
+| `POST /api/seo/redirects` | `manage_options` | Create a redirect (`oldPath` must start with `/`, `newPath` a path or http(s) URL) |
+| `PUT /api/seo/redirects/:id` | `manage_options` | Change the redirect target |
+| `DELETE /api/seo/redirects/:id` | `manage_options` | Delete a redirect |
+| `GET /api/seo/404s` | `manage_options` | 404 log, most-hit first, paginated |
+| `DELETE /api/seo/404s?path=…` | `manage_options` | Dismiss one 404 path |
 | `GET /admin` | — | React admin SPA (Static Assets; calls the real API, no fake data) |
 | `GET /api/ai/providers` | `manage_options` | Providers + configured state; Workers AI is the default |
 | `POST /api/ai/providers/select` | `manage_options` | Select a provider (`{ provider }`) |
@@ -585,11 +615,119 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   are M8.
 - **Not a full AI content studio.** The content-writer drafts a post;
   the editorial calendar, SEO engine and Yoast/Rank Math import are
-  Milestone 7.
+  Milestone 7 — built; see [What Milestone 7 is](#what-milestone-7-is).
 - **Not a backup system.** The backup-advisor only advises on cadence
   from measured data; real backup/restore is Milestone 9.
 - **Not a WordPress importer.** The migration-assistant only reports
   content counts and conversion history; WXR import is Milestone 9.
+
+## What Milestone 7 is
+
+- **Per-post SEO fields** (`src/modules/seo/meta.ts`). SEO title, meta
+  description, focus keyword, canonical URL, noindex flag, Open Graph
+  title/description/image (image = an attachment id from the media
+  library, verified to exist), and Twitter card type — stored as
+  `wp_postmeta` keys (`_wl_seo_*`) through the posts service, validated
+  (title ≤ 70, description ≤ 160, keyword ≤ 100, canonical must be an
+  http(s) URL or empty). `GET/PUT /api/posts/:id/seo` (`edit_posts`);
+  the post detail payload includes the fields. The block editor has an
+  SEO panel with live character counts and a Google-style snippet
+  preview, labelled as a preview — never claimed as a real ranking.
+- **Head rendering** (`src/modules/seo/head.ts`). Every public page
+  emits a real `<title>`, meta description, canonical link, robots meta
+  (noindex when set), Open Graph + Twitter Card tags, and JSON-LD
+  (WebSite + Article for single posts + BreadcrumbList), using the SEO
+  fields with fallbacks (site title/tagline, excerpt). All values are
+  escaped; a hostile title is tested to render as escaped text, not
+  markup.
+- **SEO analysis engine** (`src/modules/seo/analyze.ts`). A
+  deterministic scorer over stored content only: 9 checks when no
+  focus keyword is set, 12 when one is (without a keyword the four
+  keyword-placement checks collapse into one "no keyword set"
+  warning) — title length, description length/presence, focus keyword
+  in title / first paragraph / slug / headings, heading structure (an
+  H1 in the content fails, skipped levels warn, no headings at all
+  passes), image alt coverage, internal links (0 warns, never fails),
+  word count, readability estimate (Flesch reading-ease, labelled an
+  estimate; too little text warns), canonical present (missing warns).
+  Each check is pass/warn/fail and the score is
+  `round(100 · (passes + 0.5 · warns) / checks run)` on a 0–100 scale
+  (see `docs/seo/seo.md`). `GET /api/posts/:id/seo/analysis`.
+  The M6 **seo-auditor agent now uses this engine** — its data output
+  is the analysis and its summary names the average score (tested: the
+  agent's result matches a direct analysis of the same posts).
+- **Sitemap + robots upgrade** (`src/modules/seo/sitemap.ts`,
+  `robots.ts`). Per-URL `<changefreq>`/`<priority>` from post type +
+  recency (home daily/1.0; post &lt;7d daily/0.9, &lt;30d weekly/0.8,
+  &lt;365d monthly/0.6, older yearly/0.5; page monthly/0.7; term
+  weekly/0.5), `<lastmod>` from updated dates, image entries for posts
+  referencing attachments via `wp:image {"id":N}` blocks — only
+  attachments that exist, max 10 per URL. Above 1,000 URLs the sitemap
+  becomes an index with pages of 1,000 (`/sitemap.xml?page=N`, 50,000
+  URL cap; tested with a synthetic 1,050-post fixture: index with
+  pages 1–2, page 1 = 1,000 `<url>`, page 2 = 51). `robots.txt` is
+  configurable (`GET/PUT /api/seo/robots`, `manage_options`); rules
+  that would block `/admin` or `/api` are rejected, including
+  `Disallow: /`.
+- **Redirect manager + 404 log** (`src/modules/seo/redirects.ts`,
+  `notfound.ts`; admin `#/seo`). Redirects list/create/edit/delete over
+  the M2 `wl_redirects` table. Public 404s are logged to `wl_404_log`
+  (path + referrer + count + first/last seen, capped at the 500 most
+  recently seen paths, pruned on insert); **query strings are stripped
+  before logging** so tokens and passwords never land in the log, and
+  paths under `/api`, `/admin`, `/media`, `/feed`, `/sitemap*`,
+  `/robots.txt` and `/favicon.ico` are not logged. A 404 row has a
+  one-click "Create redirect" that prefills the source path.
+- **Content studio** (admin `#/studio`). Editorial calendar: stored
+  posts grouped by date for the next 30 days (a draft with a future
+  date *is* the schedule — Wordless has no "future" status yet).
+  Content ideas go through the **real M6 content-writer AI task API**;
+  when no provider is configured the page says so and offers the mock
+  provider for local dev — ideas are never faked. An approved
+  `create_post` proposal opens the new draft directly in the block
+  editor ("Open in editor" links from applied task results). Three
+  built-in **content templates** (announcement, how-to guide, news
+  update) create real draft posts with Gutenberg block-comment HTML.
+- **Yoast / Rank Math metadata import** (`src/modules/seo/import.ts`).
+  `POST /api/seo/import` accepts Wordless (`_wl_seo_*`), Yoast
+  (`_yoast_wpseo_*`, including `meta-robots-noindex` and the Open Graph
+  / Twitter fields) and Rank Math (`rank_math_*`, including the `robots`
+  array/string) keys, matched by post ID or slug, validated through the
+  same validator as the SEO endpoint, max 500 rows. The result reports
+  applied vs skipped with a reason per skipped row; unknown keys are
+  reported, never silently dropped.
+- **Compat registry:** a separate `SEO_COMPAT` list (10 entries) for the
+  Wordless-native SEO API surface — deliberately not in
+  `WORDPRESS_COMPAT`, because these are not WordPress functions.
+- **Migration `0007_m7.sql` was needed** (additive only): `wl_404_log`.
+  SEO fields live in `wp_postmeta`; robots.txt lives in `wp_options`
+  (`wl_robots_txt`). Existing local D1 databases need
+  `npx wrangler d1 migrations apply DB --local` before the SEO routes work.
+- 262 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 7 is not
+
+- **Not search-engine submission.** Wordless never pings Google or
+  Bing and never claims to; there is no Search Console integration and
+  no rank tracking. The sitemap and robots.txt are the only
+  search-engine-facing outputs.
+- **Not rankings or traffic.** The analysis score is computed from the
+  site's own stored content (title, description, keyword, headings,
+  alt text, links, word count, readability estimate, canonical). It is
+  a content-quality score, not a ranking prediction, and no traffic or
+  analytics numbers are invented anywhere.
+- **Not full-text search.** Search is still LIKE-based (M2), unchanged
+  by this milestone.
+- **Not a "future" post status.** The calendar treats a draft with a
+  future date as scheduled; a real scheduled-publish status is a
+  later milestone.
+- **Not pattern rendering.** Block themes built from `wp:pattern`
+  blocks (e.g. Twenty Twenty-Five) still render nearly empty — the
+  M5 known gap, unchanged.
+- **Not commerce.** Email sending, payments, analytics and social
+  publishing are Milestone 8; the content studio's AI ideas are
+  drafts only.
 
 ## What Milestone 3 is
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { postUrl } from "../lib/permalinks";
-import type { MediaItem, MediaList, Post, Revision } from "../lib/types";
+import type { MediaItem, MediaList, Post, PostSeo, Revision, SeoAnalysis } from "../lib/types";
 import { emptyParagraph, newBlockId, parseBlocks, serializeBlocks } from "../editor/blocks";
 import type { Block } from "../editor/blocks";
 import { ErrorBox, Modal, Spinner } from "../components/ui";
@@ -152,6 +152,10 @@ export function EditorPage({
   const [revisions, setRevisions] = useState<Revision[] | null>(null);
   const [autosaveAt, setAutosaveAt] = useState<string | null>(null);
   const [addType, setAddType] = useState<Block["type"]>("paragraph");
+  const [seo, setSeo] = useState<PostSeo | null>(null);
+  const [seoDraft, setSeoDraft] = useState<PostSeo | null>(null);
+  const [analysis, setAnalysis] = useState<SeoAnalysis | null>(null);
+  const [seoSaving, setSeoSaving] = useState(false);
   const dirtyRef = useRef(false);
   const stateRef = useRef({ title, slug, status, blocks, post });
   stateRef.current = { title, slug, status, blocks, post };
@@ -170,6 +174,11 @@ export function EditorPage({
         const parsed = parseBlocks(loaded.content || "");
         setBlocks(parsed.length > 0 ? parsed : [emptyParagraph()]);
         setRevisions(await api.get<Revision[]>(`/api/posts/${postId}/revisions`));
+        const seoFields = await api.getPostSeo(postId);
+        if (cancelled) return;
+        setSeo(seoFields);
+        setSeoDraft(seoFields);
+        setAnalysis(await api.getPostSeoAnalysis(postId));
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load the content.");
       } finally {
@@ -234,7 +243,9 @@ export function EditorPage({
   };
 
   const pickImage = (item: MediaItem): void => {
-    if (pickerFor === "__new__") {
+    if (pickerFor === "__og__") {
+      setSeoDraft((prev) => (prev ? { ...prev, ogImageId: item.id } : prev));
+    } else if (pickerFor === "__new__") {
       dirtyRef.current = true;
       setBlocks((prev) => [
         ...prev,
@@ -244,6 +255,28 @@ export function EditorPage({
       updateBlock(pickerFor, { attachmentId: item.id, url: item.url, alt: item.alt });
     }
     setPickerFor(null);
+  };
+
+  const updateSeo = (patch: Partial<PostSeo>): void => {
+    setSeoDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  const saveSeo = async (): Promise<void> => {
+    if (postId === undefined || !seoDraft) return;
+    setError(null);
+    setNotice(null);
+    setSeoSaving(true);
+    try {
+      const saved = await api.updatePostSeo(postId, seoDraft);
+      setSeo(saved);
+      setSeoDraft(saved);
+      setAnalysis(await api.getPostSeoAnalysis(postId));
+      setNotice("SEO fields saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save SEO fields.");
+    } finally {
+      setSeoSaving(false);
+    }
   };
 
   const save = async (publish: boolean): Promise<void> => {
@@ -341,6 +374,91 @@ export function EditorPage({
           {post ? <p className="hint">Changing the slug keeps the old URL working — a redirect is created automatically.</p> : null}
         </div>
       </div>
+
+      {/* SEO panel (Milestone 7). Fields live in postmeta; the score below is computed from the stored content only. */}
+      {postId === undefined ? (
+        <div className="card">
+          <h3>SEO</h3>
+          <p className="muted">Save this post first — SEO fields are set on the saved post.</p>
+        </div>
+      ) : seoDraft ? (
+        <div className="card">
+          <h3>SEO</h3>
+          <div className="field">
+            <label htmlFor="seo-title">SEO title ({seoDraft.title.length}/70)</label>
+            <input id="seo-title" value={seoDraft.title} onChange={(e) => updateSeo({ title: e.target.value })} placeholder="Defaults to the post title" />
+          </div>
+          <div className="field">
+            <label htmlFor="seo-description">Meta description ({seoDraft.description.length}/160)</label>
+            <textarea id="seo-description" value={seoDraft.description} onChange={(e) => updateSeo({ description: e.target.value })} rows={2} placeholder="Defaults to the excerpt" />
+          </div>
+          <div className="field">
+            <label htmlFor="seo-keyword">Focus keyword ({seoDraft.focusKeyword.length}/100)</label>
+            <input id="seo-keyword" value={seoDraft.focusKeyword} onChange={(e) => updateSeo({ focusKeyword: e.target.value })} placeholder="e.g. winter training" />
+          </div>
+          <div className="field">
+            <label htmlFor="seo-canonical">Canonical URL (optional)</label>
+            <input id="seo-canonical" value={seoDraft.canonical} onChange={(e) => updateSeo({ canonical: e.target.value })} placeholder="https://example.com/this-post" />
+          </div>
+          <div className="field">
+            <label>
+              <input type="checkbox" checked={seoDraft.noindex} onChange={(e) => updateSeo({ noindex: e.target.checked })} /> Noindex — ask search engines not to index this post
+            </label>
+          </div>
+          <div className="field">
+            <label htmlFor="seo-og-title">Open Graph title</label>
+            <input id="seo-og-title" value={seoDraft.ogTitle} onChange={(e) => updateSeo({ ogTitle: e.target.value })} placeholder="Defaults to the SEO title" />
+          </div>
+          <div className="field">
+            <label htmlFor="seo-og-description">Open Graph description</label>
+            <textarea id="seo-og-description" value={seoDraft.ogDescription} onChange={(e) => updateSeo({ ogDescription: e.target.value })} rows={2} placeholder="Defaults to the meta description" />
+          </div>
+          <div className="field">
+            <label>Open Graph image</label>
+            <p>
+              {seoDraft.ogImageId > 0 ? `Attachment #${seoDraft.ogImageId}` : "No image set."}{" "}
+              <button type="button" className="small" onClick={() => setPickerFor("__og__")}>Choose image</button>{" "}
+              {seoDraft.ogImageId > 0 ? <button type="button" className="small ghost" onClick={() => updateSeo({ ogImageId: 0 })}>Remove</button> : null}
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="seo-twitter">Twitter card</label>
+            <select id="seo-twitter" value={seoDraft.twitterCard} onChange={(e) => updateSeo({ twitterCard: e.target.value as PostSeo["twitterCard"] })}>
+              <option value="summary">Summary</option>
+              <option value="summary_large_image">Summary with large image</option>
+            </select>
+          </div>
+          <button type="button" className="primary" disabled={seoSaving} onClick={() => void saveSeo()}>
+            {seoSaving ? "Saving…" : "Save SEO fields"}
+          </button>
+
+          <div className="snippet-preview" style={{ marginTop: 16, border: "1px solid var(--border, #ddd)", padding: 12, borderRadius: 8 }}>
+            <p className="muted" style={{ marginTop: 0 }}>Search snippet preview — an approximation of how a search result might look. It is not a real ranking.</p>
+            <p style={{ color: "#1a0dab", fontSize: 18, margin: "4px 0" }}>{seoDraft.title || title || "(untitled)"}</p>
+            <p className="muted" style={{ margin: "2px 0", fontSize: 13 }}>{previewUrl ?? `/${slug || "post"}`}</p>
+            <p style={{ margin: "2px 0", fontSize: 13 }}>{seoDraft.description || post?.excerpt || "No description yet."}</p>
+          </div>
+
+          {analysis ? (
+            <div style={{ marginTop: 16 }}>
+              <h4>SEO analysis — {analysis.score}/100</h4>
+              <p className="muted">
+                {analysis.wordCount} words · {analysis.internalLinks} internal link(s) · {analysis.externalLinks} external link(s) ·{" "}
+                {analysis.images} image(s), {analysis.imagesMissingAlt} without alt text
+                {analysis.readingEase !== null ? ` · readability (Flesch estimate) ${analysis.readingEase}` : " · readability estimate unavailable (under 10 words)"}.
+              </p>
+              <ul>
+                {analysis.checks.map((check) => (
+                  <li key={check.id}>
+                    <span className={`badge ${check.status}`}>{check.status}</span>{" "}
+                    <strong>{check.label}</strong> — {check.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="block-list">
         {blocks.map((block, idx) => (

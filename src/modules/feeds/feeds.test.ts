@@ -3,7 +3,11 @@ import { createTestDb, type TestDb } from "../../test/test-db";
 import { createPost } from "../posts/service";
 import { createTerm } from "../terms/service";
 import { setPostTerms } from "../terms/service";
-import { robotsTxt, rssFeed, sitemapXml } from "./service";
+import { rssFeed } from "./service";
+// Sitemap + robots moved to the SEO module in Milestone 7; the feeds
+// tests still cover them here as regression tests.
+import { getRobotsTxt as robotsTxt } from "../seo/robots";
+import { sitemapXml } from "../seo/sitemap";
 
 let tdb: TestDb;
 

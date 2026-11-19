@@ -9,8 +9,6 @@ import { getOption } from "../options/service";
 import { postUrl } from "../permalinks/service";
 import { rowToPost } from "../posts/repo";
 import type { Post } from "../posts/types";
-import { listTerms } from "../terms/service";
-import { termUrl } from "../permalinks/service";
 
 export function escapeXml(value: string): string {
   return value
@@ -71,35 +69,10 @@ ${items.join("\n")}
 </rss>`;
 }
 
-/** XML sitemap: published posts/pages + terms with counts. */
-export async function sitemapXml(db: Db): Promise<string> {
-  const base = await siteUrl(db);
-  const posts = await latestPublished(db, 1000);
-  const urls: string[] = [`  <url><loc>${escapeXml(base)}/</loc></url>`];
-  for (const post of posts) {
-    const loc = base + (await postUrl(db, post));
-    const lastmod = (post.modifiedGmt || post.modified || post.date || "").slice(0, 10);
-    urls.push(
-      `  <url><loc>${escapeXml(loc)}</loc>${lastmod ? `<lastmod>${escapeXml(lastmod)}</lastmod>` : ""}</url>`,
-    );
-  }
-  for (const taxonomy of ["category", "tag"] as const) {
-    const { terms } = await listTerms(db, taxonomy, { perPage: 100 });
-    for (const term of terms) {
-      if (term.count === 0) continue;
-      urls.push(`  <url><loc>${escapeXml(base + termUrl(term.taxonomy, term.slug))}</loc></url>`);
-    }
-  }
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls.join("\n")}
-</urlset>`;
-}
-
-export async function robotsTxt(db: Db): Promise<string> {
-  const base = await siteUrl(db);
-  return `User-agent: *
-Allow: /
-Sitemap: ${base}/sitemap.xml
-`;
-}
+/**
+ * Sitemap + robots moved to the SEO module in Milestone 7
+ * (src/modules/seo/sitemap.ts, src/modules/seo/robots.ts) — this file
+ * keeps RSS only. The old sitemapXml/robotsTxt exports are gone; use
+ * the SEO module (its sitemap is paginated and its robots.txt is
+ * configurable). The feeds tests import from there.
+ */

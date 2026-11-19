@@ -16,7 +16,7 @@ import { listApprovedThreaded } from "../comments/service";
 import type { Comment } from "../comments/types";
 import { postUrl } from "../permalinks/service";
 import { listPostsByDatePrefix } from "../permalinks/service";
-import { listPosts } from "../posts/service";
+import { getPostById, listPosts } from "../posts/service";
 import type { Post } from "../posts/types";
 import { searchPosts } from "../search/service";
 import { resolveMenuByLocation } from "../menus/service";
@@ -33,6 +33,7 @@ import {
 } from "../themes/templates";
 import { renderContent } from "./blocks";
 import { escapeHtml, layout, type NavItem } from "./theme";
+import { buildPageSeo } from "../seo/head";
 
 export interface RenderedPage {
   status: number;
@@ -127,6 +128,32 @@ async function finishPage(
   extraBody?: string,
 ): Promise<RenderedPage> {
   const status = fallback.status ?? 200;
+  // SEO head (M7): computed once for both document builders. The SEO
+  // title/description replace the fallback values (builders already
+  // emit <title> and <meta name="description">); headTags carries the
+  // remaining tags (canonical, robots, OG, Twitter, JSON-LD).
+  const post = ctx.postId !== undefined ? await getPostById(db, ctx.postId) : null;
+  const seo = await buildPageSeo(db, {
+    // TemplateKind "index" (a theme template with no specific page) is
+    // the home page for SEO purposes.
+    kind: ctx.kind === "index" ? "home" : ctx.kind,
+    title: ctx.title,
+    description: ctx.description,
+    canonicalPath: ctx.kind === "search" || ctx.kind === "404" ? null : ctx.baseUrl,
+    post,
+    breadcrumbs:
+      ctx.kind === "single" && post !== null
+        ? [{ name: post.title || "(untitled)", path: ctx.baseUrl }]
+        : ctx.kind === "archive" && ctx.archiveTitle !== undefined
+          ? [{ name: ctx.archiveTitle, path: ctx.baseUrl }]
+          : undefined,
+  });
+  const seoFallback: FallbackPage = {
+    ...fallback,
+    title: seo.title,
+    description: seo.description,
+    headExtra: [fallback.headExtra ?? "", seo.headTags].filter((s) => s !== "").join("\n"),
+  };
   if (opts?.storage !== undefined) {
     try {
       const loaded = await loadActiveTheme(db, opts.storage, opts.variation);
@@ -143,25 +170,26 @@ async function finishPage(
           return {
             status: ctx.kind === "404" ? 404 : 200,
             html: themedDocument({
-              title: ctx.title,
+              title: seo.title,
               siteName: ctx.siteName,
-              description: ctx.description,
+              description: seo.description,
               stylesheetHref: href,
               body: rendered.html,
               extraBody,
+              headExtra: seo.headTags,
             }),
           };
         }
       }
       return {
         status,
-        html: layout({ ...fallback, stylesheetHref: href }),
+        html: layout({ ...seoFallback, stylesheetHref: href }),
       };
     } catch {
       // Theme loading failed — fall through to the M2 layout below.
     }
   }
-  return { status, html: layout(fallback) };
+  return { status, html: layout(seoFallback) };
 }
 
 async function postListHtml(db: Db, posts: Post[]): Promise<string> {
@@ -265,6 +293,7 @@ ${renderContent(post.content)}
       kind: "single",
       title: post.title || "(untitled)",
       post: postData,
+      postId: post.id,
       page: 1,
       totalPages: 1,
       baseUrl: postData.url,
@@ -294,6 +323,7 @@ ${renderContent(post.content)}
       kind: "page",
       title: post.title || "(untitled)",
       post: postData,
+      postId: post.id,
       page: 1,
       totalPages: 1,
       baseUrl: postData.url,

@@ -381,4 +381,25 @@ export const AI_COMPAT: CompatEntry[] = [
   { name: "wl_ai_memory", level: "partial", description: "GET/POST /api/ai/memory — website facts + admin notes used as agent context. Rebuild re-ingests from the site; notes never contain secrets." },
 ];
 
+/**
+ * Wordless SEO API surface (Milestone 7) — NOT WordPress functions, so
+ * they live in a separate list, not WORDPRESS_COMPAT. Each entry maps to
+ * a real HTTP endpoint under /api/posts/:id/seo or /api/seo/*; "partial"
+ * means the endpoint exists and works, with the documented M7 limits
+ * (no live search-engine submission, no rank tracking — the analysis
+ * score is computed from stored content only).
+ */
+export const SEO_COMPAT: CompatEntry[] = [
+  { name: "wl_seo_fields", level: "partial", description: "GET/PUT /api/posts/:id/seo — per-post SEO title, description, focus keyword, canonical, noindex, OG/Twitter fields, stored as wp_postmeta. Returned inside the post detail payload." },
+  { name: "wl_seo_analysis", level: "partial", description: "GET /api/posts/:id/seo/analysis — deterministic 0–100 score from stored content (title, description, keyword, headings, alt text, links, word count, readability estimate, canonical). No rankings or traffic are invented." },
+  { name: "wl_seo_head", level: "partial", description: "Public pages render <title>, meta description, canonical, robots, Open Graph, Twitter Card and JSON-LD (WebSite + Article + BreadcrumbList) with stored-field fallbacks." },
+  { name: "wl_seo_sitemap", level: "partial", description: "GET /sitemap.xml — paginated at 1,000 URLs (index above that), changefreq/priority from recency, image entries only for existing attachments." },
+  { name: "wl_seo_robots", level: "partial", description: "GET/PUT /api/seo/robots — configurable robots.txt; rules blocking /admin or /api are rejected." },
+  { name: "wl_seo_redirects", level: "partial", description: "GET/POST/PUT/DELETE /api/seo/redirects — manual 301s over wl_redirects (slug changes already create them automatically)." },
+  { name: "wl_seo_404s", level: "partial", description: "GET/DELETE /api/seo/404s — public 404 log (query strings stripped, capped at 500 paths) with one-click redirect creation." },
+  { name: "wl_seo_templates", level: "partial", description: "GET /api/seo/templates + POST /api/seo/templates/:slug/create — three content templates (announcement, how-to, news update) that create real draft posts." },
+  { name: "wl_seo_calendar", level: "partial", description: "GET /api/seo/calendar — stored posts grouped by date for the next 30 days (a draft with a future date is the schedule; no 'future' status yet)." },
+  { name: "wl_seo_import", level: "partial", description: "POST /api/seo/import — Yoast SEO (_yoast_wpseo_*) and Rank Math (rank_math_*) metadata import by post ID or slug; unknown keys and invalid rows are reported, never silently dropped." },
+];
+
 export type { Role };

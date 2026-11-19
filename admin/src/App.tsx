@@ -16,6 +16,8 @@ import { ActivityPage } from "./pages/Activity";
 import { ConversionPage } from "./pages/Conversion";
 import { ThemeEditorPage } from "./pages/ThemeEditor";
 import { CommandCentrePage } from "./pages/CommandCentre";
+import { SeoPage } from "./pages/Seo";
+import { StudioPage } from "./pages/Studio";
 
 export interface AppSettings {
   timezone: string;
@@ -38,6 +40,8 @@ const NAV: Array<{ hash: string; label: string }> = [
   { hash: "#/conversion", label: "Conversion" },
   { hash: "#/themes", label: "Themes" },
   { hash: "#/ai", label: "AI" },
+  { hash: "#/seo", label: "SEO" },
+  { hash: "#/studio", label: "Content Studio" },
 ];
 
 function routeFromHash(): string {
@@ -200,6 +204,12 @@ export function App(): React.ReactElement {
       break;
     case "ai":
       page = <CommandCentrePage />;
+      break;
+    case "seo":
+      page = <SeoPage />;
+      break;
+    case "studio":
+      page = <StudioPage />;
       break;
     case "dashboard":
     default:

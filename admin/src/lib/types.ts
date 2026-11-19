@@ -24,6 +24,97 @@ export interface Post {
   type: "post" | "page" | "attachment" | "revision";
   commentStatus: string;
   commentCount: number;
+  /** Per-post SEO fields (Milestone 7) — present on the detail payload. */
+  seo?: PostSeo;
+}
+
+/** SEO (Milestone 7). */
+export interface PostSeo {
+  title: string;
+  description: string;
+  focusKeyword: string;
+  canonical: string;
+  noindex: boolean;
+  ogTitle: string;
+  ogDescription: string;
+  ogImageId: number;
+  twitterCard: "summary" | "summary_large_image";
+}
+
+export interface SeoCheck {
+  id: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+}
+
+export interface SeoAnalysis {
+  postId: number;
+  score: number;
+  checks: SeoCheck[];
+  wordCount: number;
+  readingEase: number | null;
+  internalLinks: number;
+  externalLinks: number;
+  images: number;
+  imagesMissingAlt: number;
+}
+
+export interface RedirectRecord {
+  id: number;
+  oldPath: string;
+  newPath: string;
+  postId: number;
+  createdAt: string;
+}
+
+export interface RedirectList {
+  redirects: RedirectRecord[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface NotFoundEntry {
+  path: string;
+  count: number;
+  referrer: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface NotFoundList {
+  entries: NotFoundEntry[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface ContentTemplate {
+  slug: string;
+  name: string;
+  description: string;
+  title: string;
+  content: string;
+}
+
+export interface CalendarDay {
+  date: string;
+  posts: Array<{ id: number; title: string; status: string; type: string; slug: string }>;
+}
+
+export interface ContentCalendar {
+  from: string;
+  to: string;
+  days: CalendarDay[];
+  total: number;
+}
+
+export interface SeoImportResult {
+  applied: number;
+  skipped: Array<{ post: string; reason: string }>;
 }
 
 export interface PostList {

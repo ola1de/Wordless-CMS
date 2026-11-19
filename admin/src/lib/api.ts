@@ -12,14 +12,22 @@ import type {
   AiProvidersResponse,
   AiTask,
   AiTaskList,
+  ContentCalendar,
+  ContentTemplate,
   ConversionJob,
   ConversionJobList,
   ExtensionRecord,
   MediaItem,
   MemoryEntry,
   MemoryList,
+  NotFoundList,
+  PostSeo,
   PreviewToken,
   ProviderInfo,
+  RedirectList,
+  RedirectRecord,
+  SeoAnalysis,
+  SeoImportResult,
   Settings,
   ThemeDetail,
   ThemeRecord,
@@ -234,5 +242,55 @@ export const api = {
   },
   rebuildAiMemory(): Promise<{ facts: number; notes: number }> {
     return request<{ facts: number; notes: number }>("/api/ai/memory/rebuild", { method: "POST" });
+  },
+
+  /** SEO (Milestone 7). */
+  getPostSeo(id: number): Promise<PostSeo> {
+    return request<PostSeo>(`/api/posts/${id}/seo`);
+  },
+  updatePostSeo(id: number, patch: Partial<PostSeo>): Promise<PostSeo> {
+    return request<PostSeo>(`/api/posts/${id}/seo`, { method: "PUT", body: JSON.stringify(patch) });
+  },
+  getPostSeoAnalysis(id: number): Promise<SeoAnalysis> {
+    return request<SeoAnalysis>(`/api/posts/${id}/seo/analysis`);
+  },
+  getRobots(): Promise<{ robots: string }> {
+    return request<{ robots: string }>("/api/seo/robots");
+  },
+  updateRobots(robots: string): Promise<{ robots: string }> {
+    return request<{ robots: string }>("/api/seo/robots", { method: "PUT", body: JSON.stringify({ robots }) });
+  },
+  listTemplates(): Promise<ContentTemplate[]> {
+    return request<ContentTemplate[]>("/api/seo/templates");
+  },
+  createFromTemplate(slug: string, title?: string): Promise<{ id: number }> {
+    return request<{ id: number }>(`/api/seo/templates/${encodeURIComponent(slug)}/create`, {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? "" }),
+    });
+  },
+  getCalendar(days = 30): Promise<ContentCalendar> {
+    return request<ContentCalendar>(`/api/seo/calendar?days=${days}`);
+  },
+  importSeo(posts: unknown[]): Promise<SeoImportResult> {
+    return request<SeoImportResult>("/api/seo/import", { method: "POST", body: JSON.stringify({ posts }) });
+  },
+  listRedirects(page = 1): Promise<RedirectList> {
+    return request<RedirectList>(`/api/seo/redirects?page=${page}`);
+  },
+  createRedirect(oldPath: string, newPath: string): Promise<RedirectRecord> {
+    return request<RedirectRecord>("/api/seo/redirects", { method: "POST", body: JSON.stringify({ oldPath, newPath }) });
+  },
+  updateRedirect(id: number, newPath: string): Promise<RedirectRecord> {
+    return request<RedirectRecord>(`/api/seo/redirects/${id}`, { method: "PUT", body: JSON.stringify({ newPath }) });
+  },
+  deleteRedirect(id: number): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/seo/redirects/${id}`, { method: "DELETE" });
+  },
+  listNotFound(page = 1): Promise<NotFoundList> {
+    return request<NotFoundList>(`/api/seo/404s?page=${page}`);
+  },
+  deleteNotFound(path: string): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/seo/404s?path=${encodeURIComponent(path)}`, { method: "DELETE" });
   },
 };

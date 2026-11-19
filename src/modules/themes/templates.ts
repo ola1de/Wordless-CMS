@@ -45,6 +45,8 @@ export interface TemplateContext {
   /** Page <title> text (without the site name suffix). */
   title: string;
   post?: TemplatePostData;
+  /** Post ID for the rendered post (M7: SEO lookup); undefined for lists. */
+  postId?: number;
   posts?: TemplatePostData[];
   page: number;
   totalPages: number;
@@ -408,6 +410,8 @@ export function themedDocument(opts: {
   stylesheetHref: string;
   body: string;
   extraBody?: string;
+  /** Extra <head> content (M7: SEO tags). Already-escaped/HTML. */
+  headExtra?: string;
 }): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -416,6 +420,7 @@ export function themedDocument(opts: {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(opts.title)} — ${escapeHtml(opts.siteName)}</title>
 <meta name="description" content="${escapeHtml(opts.description)}">
+${opts.headExtra ?? ""}
 <link rel="stylesheet" href="${escapeHtml(opts.stylesheetHref)}">
 </head>
 <body>

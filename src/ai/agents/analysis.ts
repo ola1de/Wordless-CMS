@@ -15,6 +15,8 @@ import { listExtensions } from "../../modules/extensions/service";
 import { listMedia } from "../../modules/media/service";
 import { getPermalinkStructure } from "../../modules/permalinks/service";
 import { listPosts } from "../../modules/posts/service";
+import { analyzePostSeo } from "../../modules/seo/analyze";
+import { siteUrl } from "../../modules/feeds/service";
 import { getPostTerms } from "../../modules/terms/service";
 import { getThemeDetail } from "../../modules/themes/service";
 import { getActiveThemeSlug } from "../../modules/themes/service";
@@ -32,27 +34,39 @@ export const seoAuditor: AgentDefinition = {
   id: "seo-auditor",
   name: "SEO Auditor",
   description:
-    "Audits published posts for basic SEO hygiene: missing excerpts, missing categories, empty titles, and whether the site title/tagline and permalink structure are set. Findings only in M6 — automated fixes arrive with the SEO engine in Milestone 7.",
-  capabilities: ["Audit excerpts, categories and titles", "Check site title, tagline and permalinks"],
+    "Audits published posts with the Milestone 7 SEO engine: per-post scores (title, description, keyword placement, headings, image alt text, links, word count, readability estimate, canonical) plus the basic hygiene checks (excerpts, categories, titles, site title/tagline, permalinks). Findings only — automated fixes are proposed as approvals, never applied silently.",
+  capabilities: ["Score posts with the SEO engine", "Audit excerpts, categories and titles", "Check site title, tagline and permalinks"],
   risk: "low",
   requiresProvider: false,
   async run(ctx: AgentContext): Promise<AgentResult> {
     const { db } = ctx;
+    const base = await siteUrl(db);
     const posts = await listPosts(db, { status: "publish", type: "post", page: 1, perPage: SAMPLE });
     let missingExcerpt = 0;
     let missingTerms = 0;
     let emptyTitle = 0;
+    const scored: Array<{ id: number; title: string; score: number }> = [];
+    let scoreSum = 0;
     for (const post of posts.posts) {
       if (post.excerpt.trim() === "") missingExcerpt++;
       if (post.title.trim() === "") emptyTitle++;
       const terms = await getPostTerms(db, post.id, "category");
       if (terms.length === 0) missingTerms++;
+      const analysis = await analyzePostSeo(db, post.id, base);
+      scored.push({ id: post.id, title: post.title, score: analysis.score });
+      scoreSum += analysis.score;
     }
+    const avgScore = scored.length === 0 ? null : Math.round(scoreSum / scored.length);
+    const worst = [...scored].sort((a, b) => a.score - b.score).slice(0, 3);
     const title = await getOption<string>(db, "blogname", "");
     const tagline = await getOption<string>(db, "blogdescription", "");
     const structure = await getPermalinkStructure(db);
     const findings = [
       `${posts.total} published posts checked (sample of ${posts.posts.length}).`,
+      avgScore === null
+        ? "No posts to score."
+        : `Average SEO score: ${avgScore}/100 (deterministic engine — title, description, keyword, headings, alt text, links, word count, readability estimate, canonical).`,
+      ...worst.map((w) => `Lowest score: "${w.title || "(untitled)"}" (post ${w.id}) — ${w.score}/100.`),
       `${missingExcerpt} missing an excerpt.`,
       `${missingTerms} have no category.`,
       `${emptyTitle} have an empty title.`,
@@ -61,7 +75,10 @@ export const seoAuditor: AgentDefinition = {
       `Permalink structure: ${structure}.`,
     ];
     return {
-      summary: `SEO audit: ${missingExcerpt} posts missing excerpts, ${missingTerms} without a category, ${emptyTitle} with empty titles.`,
+      summary:
+        avgScore === null
+          ? `SEO audit: no published posts to score; ${missingExcerpt} missing excerpts, ${missingTerms} without a category, ${emptyTitle} with empty titles.`
+          : `SEO audit: average score ${avgScore}/100 across ${scored.length} post(s); ${missingExcerpt} missing excerpts, ${missingTerms} without a category, ${emptyTitle} with empty titles.`,
       output: findings.join("\n"),
       data: {
         checked: posts.posts.length,
@@ -72,6 +89,9 @@ export const seoAuditor: AgentDefinition = {
         titleSet: title !== "",
         taglineSet: tagline !== "",
         permalinkStructure: structure,
+        averageScore: avgScore,
+        scores: scored,
+        worstPosts: worst,
       },
     };
   },
