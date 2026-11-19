@@ -45,7 +45,10 @@ function log(msg = "") {
 }
 
 function run(cmd, args, { stdio = "pipe" } = {}) {
-  const result = spawnSync(cmd, args, { cwd: ROOT, stdio, encoding: "utf8", shell: false });
+  // On Windows, npm/npx are .cmd shims; spawnSync without a shell cannot
+  // resolve them (ENOENT). Use the .cmd file explicitly on Windows.
+  const resolved = process.platform === "win32" && (cmd === "npm" || cmd === "npx") ? `${cmd}.cmd` : cmd;
+  const result = spawnSync(resolved, args, { cwd: ROOT, stdio, encoding: "utf8", shell: false });
   return { ok: result.status === 0, code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 

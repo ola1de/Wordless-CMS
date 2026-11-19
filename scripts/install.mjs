@@ -55,7 +55,11 @@ function fail(msg) {
 
 /** Run a command. Returns { ok, code, stdout, stderr }. */
 function run(cmd, args, { stdio = "pipe" } = {}) {
-  const result = spawnSync(cmd, args, { cwd: ROOT, stdio, encoding: "utf8", shell: false });
+  // On Windows, npm/npx are .cmd shims; spawnSync without a shell cannot
+  // resolve them (ENOENT), so the installer wrongly reported "npm was not
+  // found" even when npm works. Use the .cmd file explicitly on Windows.
+  const resolved = process.platform === "win32" && (cmd === "npm" || cmd === "npx") ? `${cmd}.cmd` : cmd;
+  const result = spawnSync(resolved, args, { cwd: ROOT, stdio, encoding: "utf8", shell: false });
   return {
     ok: result.status === 0,
     code: result.status ?? 1,
