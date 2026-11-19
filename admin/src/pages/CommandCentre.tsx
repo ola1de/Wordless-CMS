@@ -303,6 +303,11 @@ export function CommandCentrePage(): React.ReactElement {
 
       <div className="card">
         <h2>Agents</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          The email-composer and social-composer only draft — they never send. Sending an email happens through the
+          email integration (Integrations page), and only when it is configured; in test mode messages are logged,
+          not delivered. There is no social publishing integration: social is share links only.
+        </p>
         {agents === null ? (
           <Spinner />
         ) : agents.length === 0 ? (

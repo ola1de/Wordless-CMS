@@ -1,4 +1,4 @@
-# WORDLESS — Architecture (Milestone 6 summary)
+# WORDLESS — Architecture (Milestone 8 summary)
 
 The full design lives in `../docs/02-architecture.md` (system diagram,
 technology choices with reasons, D1 schema v1, kernel, module boundaries,
@@ -440,6 +440,83 @@ src/index.ts  /api/posts/:id/seo*  +  /api/seo/*  (edit_posts / manage_options /
 - **Schema.** Migration `0007_m7.sql` (additive only) adds
   `wl_404_log`. `REQUIRED_TABLES` in the health service and
   `src/test/test-db.ts` cover it.
+
+## Commerce + integrations (M8)
+
+```
+Admin #/commerce (Commerce.tsx)        Admin #/integrations (Integrations.tsx)
+   │  Products / Orders /               │  registry + config + mail log
+   │  Payments / Marketplace            │  + analytics + bindings
+   ▼                                     ▼
+src/index.ts  /api/commerce/*  +  /api/integrations/*  +  /api/marketplace/*  +  /shop/*
+   ├── products ───▶ wl_products (CRUD; slug -2/-3 suffix; delete refused when ordered)
+   ├── cart ───────▶ wl_carts (7-day expiry; token from `wordless_cart` cookie; stock-checked add)
+   ├── orders ─────▶ wl_orders + wl_order_items (pending → paid → fulfilled / cancelled)
+   │                   stock decrements once on paid, restores on cancelling a paid order
+   ├── payments ───▶ PaymentProvider (paystack / flutterwave / stripe / mock)
+   │                   webhook HMAC per provider docs; 503 when no provider is configured
+   ├── webhooks ───▶ handlePaymentWebhook (signature IS the auth; wl_webhook_log; idempotent replay)
+   ├── email ──────▶ sendMail (mock → wl_mail_log; HTTP → configured endpoint + secret)
+   │                   order confirmations, comment notifications, password resets
+   ├── integrations ┬ registry (8 defs, live configured/not from env + config)
+   │                 ├ config (wl_integration_<id> options; secret fields rejected 400)
+   │                 ├ analytics (GA4/Plausible snippet only when configured)
+   │                 ├ social (share links; no API, no counts)
+   │                 └ cloudflare (binding status read from the real env object)
+   └── marketplace ▶ installExtensionFromZip (wordless.json; ≤2 MB / ≤100 files; R2 extensions/<slug>/)
+                       activate/deactivate via wl_extensions (code is never executed by the install)
+   Public: /shop + /shop/:slug + /shop/cart + /shop/checkout(+/test) — server-rendered forms,
+   rendered through the theme system (finishPage), cart token from the cookie.
+```
+
+- **Money.** Integer minor units (kobo/cents) everywhere — `money.ts`
+  (`formatMoney`, `requireMinorUnits`, `toMinorUnits`/`toMajorUnits`).
+  A fractional price is rejected at the service boundary and in the
+  admin form. The only known limitation: formatting assumes 100 minor
+  units per major unit (zero-decimal currencies such as JPY are not
+  handled yet).
+- **Payments are honest by construction.** `resolvePaymentProvider`
+  throws a 503 (`payment_not_configured`) when nothing is selected or
+  the selected provider is unconfigured; the checkout routes surface
+  that instead of creating a paid order. Secrets live only in
+  env/secrets bindings (`PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY`,
+  `FLUTTERWAVE_SECRET_HASH`, `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `EMAIL_API_KEY`, `MOCK_PAYMENT_WEBHOOK_SECRET`)
+  — D1 stores only non-secret config (provider id, mode test/live,
+  webhook URL is derivable from the site URL). Webhook verification is
+  real HMAC: Paystack SHA512, Flutterwave `verif-hash` comparison,
+  Stripe SHA256 with a 300 s timestamp tolerance, mock SHA256. The
+  mock's `verifyPayment` treats the webhook log as the source of truth
+  (paid only after a verified mock webhook was accepted).
+- **Idempotency.** A paid webhook is applied once: `setOrderPayment`
+  records the provider + reference, `transitionOrder` to `paid`
+  decrements stock only when `stockApplied` is false, and a replayed
+  webhook is logged as `duplicate` with a 200. Cancelling a paid order
+  restores stock exactly once.
+- **Email.** `sendMail` never throws for a mail failure (callers are
+  best-effort: the webhook still answers, the comment still saves, the
+  reset response still returns the temporary password with an `emailed`
+  flag). The mock provider records the full text (capped at 10,000
+  chars) with status `logged`; the HTTP provider maps non-2xx and
+  timeouts to `failed`. `getMailFrom` uses the URL **hostname** (a
+  port in the from-address was caught by a test).
+- **Analytics.** `readAnalyticsConfig` is the single reader
+  (`getAnalyticsStatus` and `buildAnalyticsSnippet` both use it — the
+  first version recursed through them and OOM'd the test runner).
+  `finishPage` appends the snippet to `headExtra` on both the themed
+  and the fallback render paths, so it appears whichever renderer
+  serves the page. No tracking pixel is injected unless configured.
+- **Commerce-assistant.** `src/ai/agents/commerce.ts` was rewritten:
+  the agent is available now, reads products/orders/revenue from D1,
+  and reports only. Its `data` shape (`products`, `ordersByStatus`,
+  `revenueMinor`, `lowStock`) is tested against direct queries.
+- **Schema.** Migration `0008_m8.sql` (additive only) adds
+  `wl_products`, `wl_orders`, `wl_order_items`, `wl_carts`,
+  `wl_mail_log`, `wl_webhook_log`. `REQUIRED_TABLES` in the health
+  service and `src/test/test-db.ts` cover them.
+- **Compat.** `COMMERCE_COMPAT` (8 entries) and `INTEGRATIONS_COMPAT`
+  (6 entries) in `src/compat/wordpress.ts`; `AI_COMPAT`'s
+  `wl_ai_agents` entry now says the commerce-assistant is live.
 
 ## Key decisions (see `../docs/02-architecture.md` §10 for the log)
 

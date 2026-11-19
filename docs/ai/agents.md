@@ -26,10 +26,10 @@ data and report only what they measured. They never invent numbers.
 | performance-analyst | measured | low | Counts posts, revisions (incl. per-post max), media bytes, comments | Real timing budgets, cache-hit analysis — M9 |
 | design-advisor | measured | low | Checks the active theme palette against WCAG contrast (4.5:1) and reports fluid typography | Live screenshot review, layout critique — later |
 | support-responder | provider | low | Drafts a reply to a visitor's message, labelled as an AI draft | Sending the reply — M8 (email integration) |
-| analytics-reporter | measured | low | Posts/comments by status, users by role, media counts | Real visitor analytics — M8 (analytics integration) |
-| commerce-assistant | — | high | **Unavailable.** Needs the commerce system (products, orders, payments) from Milestone 8. The API rejects its tasks with a 400 and the command centre shows it as unavailable. | Everything — M8 |
-| email-composer | provider | low | Drafts an email (subject + body) from a brief, labelled as an AI draft | Sending email — M8 |
-| social-composer | provider | low | Drafts a short social post (≤280 chars) from a brief, labelled as an AI draft | Publishing to social accounts — M8 |
+| analytics-reporter | measured | low | Posts/comments by status, users by role, media counts | Real visitor analytics — M8 (analytics integration): the integration is config-only; this agent still reports stored counts only, never traffic |
+| commerce-assistant | measured | high | **Live since M8.** Reports real store data: product count, orders by status, low-stock warnings (≤5), revenue = sum of paid orders (minor units). Reports only — it never changes the store. | Creating or changing products/orders — never |
+| email-composer | provider | low | Drafts an email (subject + body) from a brief, labelled as an AI draft | Sending: drafts only. Sending is via the M8 email integration (mock logs in test mode; HTTP provider when configured) |
+| social-composer | provider | low | Drafts a short social post (≤280 chars) from a brief, labelled as an AI draft | Publishing to social accounts — not built; social is share links only (M8) |
 | backup-advisor | measured | low | Recommends a backup cadence from the site's content volume and revision counts | Actually backing up or restoring — M9 |
 | migration-assistant | measured | low | Reports content counts and conversion-job history as migration readiness | Importing WordPress content (WXR) — M9 |
 | accessibility-checker | measured | low | Alt-text coverage on media, empty post titles, `<h1>` usage in a 20-post sample | Full WCAG audit, ARIA checks — later |

@@ -213,19 +213,29 @@ describe("agent roster", () => {
     expect(ids).toContain("research-assistant");
   });
 
-  it("marks commerce-assistant unavailable until Milestone 8", () => {
+  it("marks commerce-assistant available since Milestone 8 (commerce is live)", async () => {
     const commerce = getAgent("commerce-assistant");
-    expect(commerce?.unavailableReason).toContain("Milestone 8");
+    expect(commerce?.unavailableReason).toBeUndefined();
     const listed = listAgents(true);
-    expect(listed.find((a) => a.id === "commerce-assistant")?.available).toBe(false);
-  });
-
-  it("rejects tasks for unavailable agents and unknown agents", async () => {
+    expect(listed.find((a) => a.id === "commerce-assistant")?.available).toBe(true);
+    // And it runs: an empty store reports zeros, not an error.
     const tdb = createTestDb();
     try {
-      await expect(createAiTask(tdb.db, { agent: "commerce-assistant", input: "Sell things" })).rejects.toThrow(
-        "unavailable",
-      );
+      const task = await createAiTask(tdb.db, { agent: "commerce-assistant", input: "How is the store doing?" });
+      const finished = await runAiTask(tdb.db, task.id, {
+        env: {} as never,
+        userId: 0,
+      });
+      expect(finished.status).toBe("done");
+      expect(finished.result?.data?.products).toBe(0);
+    } finally {
+      tdb.close();
+    }
+  });
+
+  it("rejects tasks for unknown agents", async () => {
+    const tdb = createTestDb();
+    try {
       await expect(createAiTask(tdb.db, { agent: "no-such-agent", input: "x" })).rejects.toThrow("Unknown AI agent");
     } finally {
       tdb.close();

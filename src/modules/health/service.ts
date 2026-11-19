@@ -38,6 +38,12 @@ const REQUIRED_TABLES = [
   "wl_ai_approvals",
   "wl_ai_memory",
   "wl_404_log",
+  "wl_products",
+  "wl_orders",
+  "wl_order_items",
+  "wl_carts",
+  "wl_mail_log",
+  "wl_webhook_log",
 ];
 
 export async function siteHealth(db: Db, env: Env, version: string): Promise<SiteHealth> {

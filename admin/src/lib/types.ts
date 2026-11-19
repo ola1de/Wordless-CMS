@@ -439,3 +439,145 @@ export interface MemoryList {
   facts: MemoryEntry[];
   notes: MemoryEntry[];
 }
+
+/** Commerce + integrations (Milestone 8). */
+export interface Product {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  priceMinor: number;
+  currency: string;
+  stock: number;
+  status: "draft" | "published";
+  featuredImageId: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductList {
+  products: Product[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface OrderItem {
+  id: number;
+  productId: number;
+  name: string;
+  priceMinor: number;
+  quantity: number;
+}
+
+export type OrderStatus = "pending" | "paid" | "fulfilled" | "cancelled";
+
+export interface Order {
+  id: string;
+  customerName: string;
+  customerEmail: string;
+  status: OrderStatus;
+  currency: string;
+  subtotalMinor: number;
+  totalMinor: number;
+  paymentProvider: string;
+  paymentReference: string;
+  stockApplied: boolean;
+  items: OrderItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrderList {
+  orders: Order[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface IntegrationInfo {
+  id: string;
+  name: string;
+  kind: string;
+  description: string;
+  setupHint: string;
+  configured: boolean;
+  configuredDetail: string;
+  config: Record<string, unknown>;
+}
+
+export interface MailLogEntry {
+  id: number;
+  provider: string;
+  toEmail: string;
+  subject: string;
+  body: string;
+  status: "logged" | "sent" | "failed";
+  createdAt: string;
+}
+
+export interface MailLogList {
+  entries: MailLogEntry[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface AnalyticsStatus {
+  provider: string;
+  measurementId: string;
+  configured: boolean;
+  detail: string;
+  snippet: string | null;
+}
+
+export interface BindingStatus {
+  binding: string;
+  present: boolean;
+  detail: string;
+}
+
+export interface PaymentProviderInfo {
+  id: string;
+  name: string;
+  description: string;
+  configured: boolean;
+  configuredDetail: string;
+  requiresKey: boolean;
+}
+
+export interface SelectedPayment {
+  provider: string;
+  mode: "test" | "live";
+}
+
+export interface WebhookLogEntry {
+  id: number;
+  provider: string;
+  event: string;
+  reference: string;
+  result: string;
+  detail: string;
+  createdAt: string;
+}
+
+export interface WebhookLogList {
+  entries: WebhookLogEntry[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface MarketplaceExtension {
+  slug: string;
+  name: string;
+  version: string;
+  kind: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}

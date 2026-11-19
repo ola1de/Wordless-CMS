@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, type TestDb } from "../../test/test-db";
 import { createPost } from "../posts/service";
+import { createProduct } from "../commerce/products";
+import { addToCart, getCart, newCartToken } from "../commerce/cart";
+import { createOrderFromCart } from "../commerce/orders";
 import { renderContent } from "./blocks";
-import { renderHome, renderNotFound, renderSingle } from "./service";
+import {
+  renderCartPage,
+  renderCheckoutResult,
+  renderHome,
+  renderNotFound,
+  renderProductPage,
+  renderShop,
+  renderSingle,
+  renderTestCheckout,
+} from "./service";
 
 let tdb: TestDb;
 
@@ -84,5 +96,86 @@ describe("public pages", () => {
     expect(page.status).toBe(404);
     expect(page.html).toContain("Page not found");
     expect(page.html).toContain('href="/"');
+  });
+});
+
+describe("shop pages (M8)", () => {
+  it("shop lists published products with prices, not drafts", async () => {
+    await createProduct(tdb.db, {
+      name: "Pack Hoodie",
+      priceMinor: 125000,
+      currency: "NGN",
+      stock: 5,
+      status: "published",
+    });
+    await createProduct(tdb.db, {
+      name: "Hidden Draft",
+      priceMinor: 100,
+      currency: "NGN",
+      stock: 1,
+      status: "draft",
+    });
+    const page = await renderShop(tdb.db, 1);
+    expect(page.status).toBe(200);
+    expect(page.html).toContain("Pack Hoodie");
+    expect(page.html).toContain("₦1,250.00");
+    expect(page.html).not.toContain("Hidden Draft");
+  });
+
+  it("product page shows price, stock note, add-to-cart and share links", async () => {
+    const product = await createProduct(tdb.db, {
+      name: "Low Stock Tee",
+      description: "<p>Soft tee.</p>",
+      priceMinor: 250000,
+      currency: "NGN",
+      stock: 2,
+      status: "published",
+    });
+    const page = await renderProductPage(tdb.db, product);
+    expect(page.status).toBe(200);
+    expect(page.html).toContain("Low Stock Tee");
+    expect(page.html).toContain("₦2,500.00");
+    expect(page.html).toContain("Only 2 left");
+    expect(page.html).toContain("Add to cart");
+    expect(page.html).toContain("twitter.com/intent/tweet");
+  });
+
+  it("cart page lists lines with totals and a checkout form", async () => {
+    const product = await createProduct(tdb.db, {
+      name: "Pack Hoodie",
+      priceMinor: 125000,
+      currency: "NGN",
+      stock: 5,
+      status: "published",
+    });
+    const token = newCartToken();
+    await addToCart(tdb.db, token, product.id, 2);
+    const page = await renderCartPage(tdb.db, await getCart(tdb.db, token));
+    expect(page.status).toBe(200);
+    expect(page.html).toContain("Pack Hoodie");
+    expect(page.html).toContain("₦2,500.00");
+    expect(page.html).toContain('action="/shop/checkout"');
+  });
+
+  it("test checkout and success pages name the order and the test-mode caveat", async () => {
+    const product = await createProduct(tdb.db, {
+      name: "Pack Hoodie",
+      priceMinor: 125000,
+      currency: "NGN",
+      stock: 5,
+      status: "published",
+    });
+    const token = newCartToken();
+    await addToCart(tdb.db, token, product.id, 1);
+    const order = await createOrderFromCart(tdb.db, token, {
+      customerName: "Ada",
+      customerEmail: "ada@example.test",
+    });
+    const testPage = await renderTestCheckout(tdb.db, order, `mock_${order.id}`);
+    expect(testPage.html).toContain("no money moves");
+    expect(testPage.html).toContain(order.id);
+    const success = await renderCheckoutResult(tdb.db, { ...order, status: "paid" });
+    expect(success.html).toContain("Thank you");
+    expect(success.html).toContain(order.id);
   });
 });

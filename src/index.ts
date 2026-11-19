@@ -61,6 +61,31 @@ import { deleteNotFound, listNotFound, logNotFound } from "./modules/seo/notfoun
 import { contentCalendar, createFromTemplate, listTemplates } from "./modules/seo/studio";
 import { importSeoMetadata } from "./modules/seo/import";
 import { siteHealth } from "./modules/health/service";
+import { getIntegrationConfig, setIntegrationConfig } from "./modules/integrations/config";
+import { listIntegrations } from "./modules/integrations/registry";
+import { listMailLog, sendMail } from "./modules/integrations/email";
+import { getAnalyticsStatus } from "./modules/integrations/analytics";
+import { cloudflareBindingStatus } from "./modules/integrations/cloudflare";
+import {
+  installExtensionFromZip,
+  listMarketplaceExtensions,
+  setMarketplaceExtensionStatus,
+} from "./modules/integrations/marketplace";
+import { createProduct, deleteProduct, getProduct, getProductBySlug, listProducts, updateProduct } from "./modules/commerce/products";
+import { addToCart, cartCookieHeader, clearCart, getCart, newCartToken, parseCartCookie, setCartQuantity } from "./modules/commerce/cart";
+import { createOrderFromCart, getOrder, listOrders, setOrderPayment, transitionOrder } from "./modules/commerce/orders";
+import { handlePaymentWebhook, listWebhookLog } from "./modules/commerce/webhooks";
+import {
+  getPaymentMode,
+  getSelectedPaymentProviderId,
+  listPaymentProviders,
+  resolvePaymentProvider,
+  setPaymentMode,
+  setSelectedPaymentProviderId,
+} from "./modules/commerce/payments/index";
+import { isPaymentProviderId } from "./modules/commerce/payments/types";
+import { hmacHex } from "./modules/commerce/payments/hmac";
+import type { OrderStatus } from "./modules/commerce/types";
 import {
   addMenuItem,
   createMenu,
@@ -103,12 +128,17 @@ import {
 import type { PostStatus } from "./modules/posts/types";
 import {
   renderDateArchive,
+  renderCartPage,
+  renderCheckoutResult,
   renderHome,
   renderNotFound,
   renderPage,
-  renderSearchPage,
+  renderProductPage,
+  renderShop,
   renderSingle,
   renderTermArchive,
+  renderTestCheckout,
+  renderSearchPage,
   type RenderOptions,
 } from "./modules/render/service";
 import {
@@ -158,7 +188,7 @@ import {
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -186,6 +216,33 @@ async function log(db: Db, user: AuthUser | null, action: string, objectType: st
     await logActivity(db, { actorId: user?.id ?? 0, action, objectType, objectId });
   } catch {
     // Audit logging must never break the request it records.
+  }
+}
+
+/**
+ * Best-effort comment notification (M8). Sends to the site's admin_email
+ * via the email integration when one is configured; in test mode the
+ * message is only logged in wl_mail_log (never claimed delivered). A
+ * mail failure never breaks comment creation.
+ */
+async function notifyAdminOfComment(
+  db: Db,
+  env: Env,
+  postTitle: string,
+  commentAuthor: string,
+  commentContent: string,
+): Promise<void> {
+  try {
+    const adminEmail = await getOption<string>(db, "admin_email", "");
+    if (adminEmail === "") return;
+    const siteName = await getOption<string>(db, "blogname", "Wordless");
+    await sendMail(db, env, {
+      to: adminEmail,
+      subject: `[${siteName}] New comment on "${postTitle}"`,
+      text: `${commentAuthor} commented on "${postTitle}":\n\n${commentContent}`,
+    });
+  } catch {
+    // Notifications are best-effort.
   }
 }
 
@@ -528,6 +585,7 @@ function buildRouter(): Router {
       { canModerate: user !== null && userCan(user, "moderate_comments") },
     );
     await log(db, user, "comment.create", "comment", comment.id);
+    await notifyAdminOfComment(db, env, post.title, comment.author, comment.content);
     return jsonOk(comment, 201);
   });
 
@@ -1290,6 +1348,347 @@ function buildRouter(): Router {
     { capability: "manage_options" },
   );
 
+  // ------------------------------------------------------- integrations (M8)
+  // Registry + config (non-secret fields only — secrets are rejected
+  // by setIntegrationConfig and live only in env/secrets), email log,
+  // analytics status, Cloudflare binding status.
+  router.get(
+    "/api/integrations",
+    async ({ env }) => jsonOk(await listIntegrations(adaptD1(env.DB), env)),
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/integrations/:id/config",
+    async ({ env, params }) => jsonOk(await getIntegrationConfig(adaptD1(env.DB), params.id ?? "")),
+    { capability: "manage_options" },
+  );
+
+  router.put(
+    "/api/integrations/:id/config",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const config = await setIntegrationConfig(db, params.id ?? "", body);
+      await log(db, user, "integration.config", "option", 0);
+      return jsonOk(config);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/integrations/email/log",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listMailLog(db, { page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/integrations/analytics/status",
+    async ({ env }) => jsonOk(await getAnalyticsStatus(adaptD1(env.DB))),
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/integrations/cloudflare",
+    async ({ env }) => jsonOk(cloudflareBindingStatus(env)),
+    { capability: "manage_options" },
+  );
+
+  // ---------------------------------------------------------- marketplace (M8)
+  // Skeleton: install extensions from a ZIP upload (wordless.json
+  // manifest), list them, activate/deactivate. No remote directory.
+  router.get(
+    "/api/marketplace",
+    async ({ env }) => jsonOk(await listMarketplaceExtensions(adaptD1(env.DB))),
+    { capability: "install_plugins" },
+  );
+
+  router.post(
+    "/api/marketplace/install",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        throw new WordlessError("bad_request", 400, 'Install requires a multipart "file" field (.zip).');
+      }
+      const result = await installExtensionFromZip(
+        db,
+        new R2MediaStorage(env.MEDIA),
+        file.name,
+        new Uint8Array(await file.arrayBuffer()),
+      );
+      await log(db, user, "marketplace.install", "extension", 0);
+      return jsonOk(result, 201);
+    },
+    { capability: "install_plugins" },
+  );
+
+  router.post(
+    "/api/marketplace/:slug/activate",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const extension = await setMarketplaceExtensionStatus(db, params.slug ?? "", "active");
+      await log(db, user, "marketplace.activate", "extension", 0);
+      return jsonOk(extension);
+    },
+    { capability: "install_plugins" },
+  );
+
+  router.post(
+    "/api/marketplace/:slug/deactivate",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const extension = await setMarketplaceExtensionStatus(db, params.slug ?? "", "inactive");
+      await log(db, user, "marketplace.deactivate", "extension", 0);
+      return jsonOk(extension);
+    },
+    { capability: "install_plugins" },
+  );
+
+  // ------------------------------------------------------------ commerce (M8)
+  // Products: public list/detail show published products only; drafts
+  // and management need manage_options.
+  router.get("/api/commerce/products", async ({ url, env, user }) => {
+    const db = adaptD1(env.DB);
+    const statusParam = url.searchParams.get("status");
+    const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+    const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+    const isAdmin = user !== null && userCan(user, "manage_options");
+    if (statusParam !== null && statusParam !== "published" && !isAdmin) {
+      throw new WordlessError("forbidden", 403, "You do not have permission to do that.");
+    }
+    return jsonOk(
+      await listProducts(db, {
+        status: statusParam === "draft" ? "draft" : statusParam === "all" ? undefined : "published",
+        page,
+        perPage,
+      }),
+    );
+  });
+
+  router.post(
+    "/api/commerce/products",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const product = await createProduct(db, body as never);
+      await log(db, user, "product.create", "product", product.id);
+      return jsonOk(product, 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get("/api/commerce/products/:id", async ({ env, user, params }) => {
+    const db = adaptD1(env.DB);
+    const product = await getProduct(db, parseIdParam(params.id, "product id"));
+    if (product === null) throw new WordlessError("not_found", 404, "Product not found.");
+    if (product.status !== "published" && !(user !== null && userCan(user, "manage_options"))) {
+      throw new WordlessError("not_found", 404, "Product not found.");
+    }
+    return jsonOk(product);
+  });
+
+  router.put(
+    "/api/commerce/products/:id",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "product id");
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const product = await updateProduct(db, id, body as never);
+      await log(db, user, "product.update", "product", product.id);
+      return jsonOk(product);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.delete(
+    "/api/commerce/products/:id",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "product id");
+      const deleted = await deleteProduct(db, id);
+      await log(db, user, "product.delete", "product", id);
+      return jsonOk({ deleted });
+    },
+    { capability: "manage_options" },
+  );
+
+  // Cart: server-side, keyed by the `wordless_cart` cookie. The cookie
+  // is set on the response when a cart is first created.
+  router.get("/api/commerce/cart", async ({ env, request }) => {
+    const db = adaptD1(env.DB);
+    let token = parseCartCookie(request.headers.get("Cookie"));
+    let created = false;
+    if (token === null) {
+      token = newCartToken();
+      created = true;
+    }
+    const cart = await getCart(db, token);
+    const response = jsonOk(cart);
+    if (created) response.headers.set("Set-Cookie", cartCookieHeader(token));
+    return response;
+  });
+
+  router.post("/api/commerce/cart", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    let token = parseCartCookie(request.headers.get("Cookie"));
+    let created = false;
+    if (token === null) {
+      token = newCartToken();
+      created = true;
+    }
+    const cart = await addToCart(db, token, Number(body.productId), Number(body.quantity ?? 1));
+    const response = jsonOk(cart);
+    if (created) response.headers.set("Set-Cookie", cartCookieHeader(token));
+    return response;
+  });
+
+  router.put("/api/commerce/cart", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token === null) throw new WordlessError("bad_request", 400, "The cart is empty.");
+    return jsonOk(await setCartQuantity(db, token, Number(body.productId), Number(body.quantity ?? 0)));
+  });
+
+  router.delete("/api/commerce/cart", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token !== null) await clearCart(db, token);
+    return jsonOk({ cleared: true });
+  });
+
+  // Checkout (API): creates a pending order from the cart, then starts
+  // a payment with the selected provider. With no provider configured
+  // this is a 503 — never a fake success.
+  router.post("/api/commerce/checkout", async ({ request, env, user }) => {
+    const db = adaptD1(env.DB);
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token === null) throw new WordlessError("bad_request", 400, "The cart is empty.");
+    const order = await createOrderFromCart(db, token, {
+      customerName: body.customerName,
+      customerEmail: body.customerEmail,
+    });
+    const { provider } = await resolvePaymentProvider(db, env);
+    const base = await siteUrl(db);
+    const checkout = await provider.createCheckout(env, {
+      order,
+      siteUrl: base,
+      successUrl: `${base}/shop/checkout/success?order=${order.id}`,
+      cancelUrl: `${base}/shop/checkout/cancelled?order=${order.id}`,
+    });
+    const updated = await setOrderPayment(db, order.id, provider.id, checkout.reference);
+    await log(db, user, "order.create", "order", 0);
+    return jsonOk({ order: updated, checkoutUrl: checkout.checkoutUrl, reference: checkout.reference }, 201);
+  });
+
+  // Orders (admin).
+  router.get(
+    "/api/commerce/orders",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const statusParam = url.searchParams.get("status");
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      const status =
+        statusParam === "pending" || statusParam === "paid" || statusParam === "fulfilled" || statusParam === "cancelled"
+          ? (statusParam as OrderStatus)
+          : undefined;
+      return jsonOk(await listOrders(db, { status, page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/commerce/orders/:id",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const order = await getOrder(db, params.id ?? "");
+      if (order === null) throw new WordlessError("not_found", 404, "Order not found.");
+      return jsonOk(order);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/commerce/orders/:id/transition",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const to = body.status;
+      if (to !== "paid" && to !== "fulfilled" && to !== "cancelled") {
+        throw new WordlessError("bad_request", 400, 'Field "status" must be "paid", "fulfilled" or "cancelled".');
+      }
+      const order = await transitionOrder(db, params.id ?? "", to as OrderStatus);
+      await log(db, user, "order.transition", "order", 0);
+      return jsonOk(order);
+    },
+    { capability: "manage_options" },
+  );
+
+  // Payment provider selection + status.
+  router.get(
+    "/api/commerce/payments/providers",
+    async ({ env }) => jsonOk(listPaymentProviders(env)),
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/commerce/payments/selected",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk({
+        provider: await getSelectedPaymentProviderId(db),
+        mode: await getPaymentMode(db),
+      });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/commerce/payments/select",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const provider = await setSelectedPaymentProviderId(db, body.provider ?? null);
+      const mode = body.mode !== undefined ? await setPaymentMode(db, body.mode) : await getPaymentMode(db);
+      await log(db, user, "payment.select", "option", 0);
+      return jsonOk({ provider, mode, providers: listPaymentProviders(env) });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/commerce/webhooks/log",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listWebhookLog(db, { page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  // Payment webhooks: no session auth — the provider signature IS the
+  // auth (see src/modules/commerce/webhooks.ts). Always answer 200 for
+  // verified-but-unactionable events so providers stop retrying.
+  router.post("/api/commerce/webhooks/:provider", async ({ request, env, params }) => {
+    const db = adaptD1(env.DB);
+    const outcome = await handlePaymentWebhook(db, env, params.provider ?? "", request);
+    if (outcome.httpStatus === 401) {
+      return jsonError("webhook_rejected", 401, outcome.detail);
+    }
+    return jsonOk(outcome, outcome.httpStatus);
+  });
+
   // ------------------------------------------------------------------ themes (M5)
   // Literal paths are registered before /api/themes/:slug so "active",
   // "import" and "preview" are never read as a slug (first match wins).
@@ -1588,10 +1987,217 @@ function buildRouter(): Router {
       // never logged and never stored in plaintext (only the hash is).
       const { user: updated, temporaryPassword } = await resetUserPassword(db, id);
       await log(db, user, "user.password_reset", "user", id);
-      return jsonOk({ user: updated, temporaryPassword });
+      // M8: email the temporary password when the email integration can
+      // send; in test mode it is only logged in wl_mail_log. `emailed`
+      // says whether the message reached the integration at all — the
+      // password is still in this response, so the admin is not locked
+      // out if mail is not configured.
+      let emailed = false;
+      try {
+        const sent = await sendMail(db, env, {
+          to: updated.email,
+          subject: "Your Wordless password was reset",
+          text: `Your password was reset by a site administrator. Your temporary password is: ${temporaryPassword}\n\nSign in and change it as soon as you can.`,
+        });
+        emailed = sent.delivered;
+      } catch {
+        emailed = false;
+      }
+      return jsonOk({ user: updated, temporaryPassword, emailed });
     },
     { capability: "edit_users" },
   );
+
+  // -------------------------------------------------------------------- shop (M8)
+  // Server-rendered storefront (no JavaScript). Literal routes are
+  // registered before /shop/:slug so "cart" and "checkout" are never
+  // mistaken for a product slug.
+  router.get("/shop", async ({ url, env, request }) => {
+    const db = adaptD1(env.DB);
+    const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+    const rendered = await renderShop(db, page, await renderOpts(db, env, url, request));
+    return htmlResponse(rendered.html, rendered.status);
+  });
+
+  router.get("/shop/cart", async ({ url, env, request }) => {
+    const db = adaptD1(env.DB);
+    let token = parseCartCookie(request.headers.get("Cookie"));
+    let created = false;
+    if (token === null) {
+      token = newCartToken();
+      created = true;
+    }
+    const notice = url.searchParams.get("notice") ?? undefined;
+    const rendered = await renderCartPage(
+      db,
+      await getCart(db, token),
+      await renderOpts(db, env, url, request),
+      notice,
+    );
+    const response = htmlResponse(rendered.html, rendered.status);
+    if (created) response.headers.set("Set-Cookie", cartCookieHeader(token));
+    return response;
+  });
+
+  router.get("/shop/checkout/test", async ({ url, env, request }) => {
+    const db = adaptD1(env.DB);
+    const order = await getOrder(db, url.searchParams.get("order") ?? "");
+    const reference = url.searchParams.get("reference") ?? "";
+    if (order === null || reference === "") {
+      const rendered = await renderNotFound(db, await renderOpts(db, env, url, request));
+      return htmlResponse(rendered.html, 404);
+    }
+    const rendered = await renderTestCheckout(db, order, reference, await renderOpts(db, env, url, request));
+    return htmlResponse(rendered.html, rendered.status);
+  });
+
+  router.get("/shop/checkout/success", async ({ url, env, request }) => {
+    const db = adaptD1(env.DB);
+    const order = await getOrder(db, url.searchParams.get("order") ?? "");
+    const rendered = await renderCheckoutResult(db, order, await renderOpts(db, env, url, request));
+    return htmlResponse(rendered.html, rendered.status);
+  });
+
+  router.get("/shop/checkout/cancelled", async ({ url, env, request }) => {
+    const db = adaptD1(env.DB);
+    const order = await getOrder(db, url.searchParams.get("order") ?? "");
+    const rendered = await renderCheckoutResult(db, order, await renderOpts(db, env, url, request));
+    return htmlResponse(rendered.html, rendered.status);
+  });
+
+  router.get("/shop/:slug", async ({ url, env, request, params }) => {
+    const db = adaptD1(env.DB);
+    const product = await getProductBySlug(db, params.slug ?? "");
+    if (product === null || product.status !== "published") {
+      const rendered = await renderNotFound(db, await renderOpts(db, env, url, request));
+      return htmlResponse(rendered.html, 404);
+    }
+    const rendered = await renderProductPage(db, product, await renderOpts(db, env, url, request));
+    return htmlResponse(rendered.html, rendered.status);
+  });
+
+  router.post("/shop/cart/add", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const form = await request.formData();
+    let token = parseCartCookie(request.headers.get("Cookie"));
+    let created = false;
+    if (token === null) {
+      token = newCartToken();
+      created = true;
+    }
+    const productId = Number(form.get("productId"));
+    const quantity = Number(form.get("quantity") ?? "1");
+    try {
+      await addToCart(db, token, productId, quantity);
+    } catch (err) {
+      const message = err instanceof WordlessError ? err.message : "Could not add that product to the cart.";
+      const response = new Response(null, { status: 303, headers: { Location: `/shop/cart?notice=${encodeURIComponent(message)}` } });
+      if (created) response.headers.set("Set-Cookie", cartCookieHeader(token));
+      return response;
+    }
+    const response = new Response(null, { status: 303, headers: { Location: "/shop/cart" } });
+    if (created) response.headers.set("Set-Cookie", cartCookieHeader(token));
+    return response;
+  });
+
+  router.post("/shop/cart/remove", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const form = await request.formData();
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token !== null) {
+      await setCartQuantity(db, token, Number(form.get("productId")), 0);
+    }
+    return new Response(null, { status: 303, headers: { Location: "/shop/cart" } });
+  });
+
+  router.post("/shop/cart/quantity", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const form = await request.formData();
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token !== null) {
+      await setCartQuantity(db, token, Number(form.get("productId")), Number(form.get("quantity") ?? "0"));
+    }
+    return new Response(null, { status: 303, headers: { Location: "/shop/cart" } });
+  });
+
+  router.post("/shop/checkout", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const form = await request.formData();
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    try {
+      if (token === null) throw new WordlessError("bad_request", 400, "The cart is empty.");
+      const order = await createOrderFromCart(db, token, {
+        customerName: form.get("customerName"),
+        customerEmail: form.get("customerEmail"),
+      });
+      const { provider } = await resolvePaymentProvider(db, env);
+      const base = await siteUrl(db);
+      const checkout = await provider.createCheckout(env, {
+        order,
+        siteUrl: base,
+        successUrl: `${base}/shop/checkout/success?order=${order.id}`,
+        cancelUrl: `${base}/shop/checkout/cancelled?order=${order.id}`,
+      });
+      await setOrderPayment(db, order.id, provider.id, checkout.reference);
+      if (provider.id === "mock") {
+        return new Response(null, {
+          status: 303,
+          headers: { Location: `/shop/checkout/test?order=${order.id}&reference=${encodeURIComponent(checkout.reference)}` },
+        });
+      }
+      return new Response(null, { status: 303, headers: { Location: checkout.checkoutUrl } });
+    } catch (err) {
+      // A checkout that cannot start shows the reason plainly on the
+      // cart page — never a fake success, never a bare JSON error.
+      const message = err instanceof WordlessError ? err.message : "Checkout could not be started.";
+      return new Response(null, {
+        status: 303,
+        headers: { Location: `/shop/cart?notice=${encodeURIComponent(message)}` },
+      });
+    }
+  });
+
+  router.post("/shop/checkout/test", async ({ request, env }) => {
+    const db = adaptD1(env.DB);
+    const form = await request.formData();
+    const orderId = String(form.get("orderId") ?? "");
+    const reference = String(form.get("reference") ?? "");
+    const order = await getOrder(db, orderId);
+    if (order === null) {
+      return new Response(null, { status: 303, headers: { Location: "/shop/cart" } });
+    }
+    if (order.paymentProvider !== "mock" || order.paymentReference !== reference) {
+      return new Response(null, { status: 303, headers: { Location: `/shop/checkout/success?order=${order.id}` } });
+    }
+    const secret = env.MOCK_PAYMENT_WEBHOOK_SECRET;
+    if (secret === undefined || secret === "") {
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: `/shop/cart?notice=${encodeURIComponent(
+            "Test checkout is not enabled: set the MOCK_PAYMENT_WEBHOOK_SECRET secret (wrangler secret put) first.",
+          )}`,
+        },
+      });
+    }
+    // Simulate the provider's webhook: the mock provider's own
+    // signature scheme signs the event, and handlePaymentWebhook does
+    // the real verification + the pending→paid transition.
+    const body = JSON.stringify({ event: "payment.paid", reference });
+    const signature = await hmacHex("SHA-256", secret, body);
+    const webhookRequest = new Request(`https://wordless.local/api/commerce/webhooks/mock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-mock-signature": signature },
+      body,
+    });
+    const outcome = await handlePaymentWebhook(db, env, "mock", webhookRequest);
+    return new Response(null, {
+      status: 303,
+      headers: {
+        Location: `/shop/checkout/success?order=${order.id}${outcome.order === "paid" ? "" : "&webhook=failed"}`,
+      },
+    });
+  });
 
   // ------------------------------------------------------- feeds + sitemap
   router.get("/feed", async ({ env }) => {
@@ -1659,11 +2265,16 @@ async function resolveVariation(
 }
 
 /** Build RenderOptions for a public request: R2 storage for theme files + variation overrides. */
-async function renderOpts(db: Db, env: Env, url: URL): Promise<RenderOptions> {
+async function renderOpts(db: Db, env: Env, url: URL, request?: Request): Promise<RenderOptions> {
   const opts: RenderOptions = { storage: new R2MediaStorage(env.MEDIA) };
   const { variation, previewToken } = await resolveVariation(db, url);
   if (variation !== undefined) opts.variation = variation;
   if (previewToken !== undefined) opts.previewToken = previewToken;
+  // M8: the shop reads the cart from the cookie token.
+  if (request !== undefined) {
+    const token = parseCartCookie(request.headers.get("Cookie"));
+    if (token !== null) opts.cartToken = token;
+  }
   return opts;
 }
 
@@ -1712,7 +2323,7 @@ async function handlePublicGet(db: Db, url: URL, opts?: RenderOptions): Promise<
 }
 
 /** Public comment submission from the rendered form: /{slug}/comments. */
-async function handlePublicCommentPost(request: Request, db: Db, url: URL, user: AuthUser | null, opts?: RenderOptions): Promise<Response> {
+async function handlePublicCommentPost(request: Request, db: Db, env: Env, url: URL, user: AuthUser | null, opts?: RenderOptions): Promise<Response> {
   const segments = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
   const slug = segments.length === 2 ? segments[0] : undefined;
   if (slug === undefined || segments[1] !== "comments") {
@@ -1765,6 +2376,7 @@ async function handlePublicCommentPost(request: Request, db: Db, url: URL, user:
       { canModerate: user !== null && userCan(user, "moderate_comments") },
     );
     await log(db, user, "comment.create", "comment", comment.id);
+    await notifyAdminOfComment(db, env, post.title, comment.author, comment.content);
     const postLink = await postUrl(db, post);
     return new Response(null, { status: 303, headers: { Location: `${postLink}#comments` } });
   } catch (err) {
@@ -1849,9 +2461,9 @@ export default {
       // Public fallback: anything that is not an API/admin route is a site URL.
       if (response.status === 404 && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/admin")) {
         if (request.method === "GET") {
-          response = await handlePublicGet(db, url, await renderOpts(db, env, url));
+          response = await handlePublicGet(db, url, await renderOpts(db, env, url, request));
         } else if (request.method === "POST" && url.pathname.endsWith("/comments")) {
-          response = await handlePublicCommentPost(request, db, url, user, await renderOpts(db, env, url));
+          response = await handlePublicCommentPost(request, db, env, url, user, await renderOpts(db, env, url, request));
         }
       }
 

@@ -53,3 +53,14 @@ id = "REPLACE-ME"
 # Worker with `wrangler secret put OPENAI_API_KEY` (never in this file),
 # optionally OPENAI_BASE_URL / OPENAI_MODEL. Without the secret the
 # provider reports "not configured".
+
+# Integrations + commerce (Milestone 8) — secrets only, no wrangler.toml
+# entries needed. Set them on the deployed Worker with `wrangler secret
+# put <NAME>` (never in this file, never in code, never in D1):
+#   PAYSTACK_SECRET_KEY, FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_SECRET_HASH,
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, EMAIL_API_KEY (with the
+#   EMAIL_API_URL non-secret setting from the Integrations page),
+#   MOCK_PAYMENT_WEBHOOK_SECRET (test-mode mock webhooks only).
+# Local development: put the same names in `.dev.vars` (git-ignored).
+# Without them the providers report "not configured" and checkout
+# refuses with a 503 — it never fakes a successful payment.

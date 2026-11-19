@@ -10,7 +10,7 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 7 — content studio + SEO engine (built, in verification).** The kernel, D1
+> **Status: Milestone 8 — integrations + commerce (built, in verification).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
@@ -21,13 +21,19 @@ One platform. One intelligent command centre. Complete website management.
 > with preview + variations), the AI operating system (provider
 > abstraction with **Workers AI as the default provider**, orchestrator
 > with three enforced operating modes, 15 specialist agents, human
-> approvals, website memory, and the AI command centre), and now the
-> content studio + SEO engine (per-post SEO fields, head tags with
-> JSON-LD, deterministic SEO analysis, sitemap with images + pagination,
+> approvals, website memory, and the AI command centre), the content
+> studio + SEO engine (per-post SEO fields, head tags with JSON-LD,
+> deterministic SEO analysis, sitemap with images + pagination,
 > configurable robots.txt, redirect manager, 404 log, editorial calendar,
-> content templates, Yoast/Rank Math metadata import) are built and
-> tested. Commerce and integrations are **not built yet** — see
-> [What M7 is not](#what-milestone-7-is-not) below. Nothing unfinished is
+> content templates, Yoast/Rank Math metadata import), and now
+> integrations + commerce (integration registry, transactional email,
+> Paystack / Flutterwave / Stripe with real HMAC webhook verification
+> plus a test-mode mock, products / cart / checkout / orders with
+> integer minor-unit money, the commerce-assistant wired to real store
+> data, social share links, analytics config, and the marketplace
+> skeleton) are built and tested. Backup, WordPress import and
+> production readiness are **not built yet** — see
+> [What M8 is not](#what-milestone-8-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -144,8 +150,12 @@ docs/themes/
   classic-conversion.md   classic-theme conversion report (M5)
 docs/seo/
   seo.md                  SEO fields, scoring formula, sitemap/robots, what is NOT done (M7)
+docs/commerce/
+  commerce.md             products, cart, checkout, orders, payments, webhooks, test mode (M8)
+docs/integrations/
+  integrations.md         registry, email, analytics, social, Cloudflare, marketplace (M8)
 docs/ai/
-  agents.md               the 15-agent roster + what each agent measures (M6)
+  agents.md               the 15-agent roster + what each agent measures (M6; commerce-assistant live since M8)
 admin/
   vite.config.ts      Vite build → admin/dist/admin/ (base /admin/)
   index.html          SPA entry point
@@ -172,7 +182,7 @@ scripts/
                       from themes/wordless-default/ (M5; tested for drift)
 ```
 
-## API (Milestone 7)
+## API (Milestone 8)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -273,6 +283,41 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `DELETE /api/seo/redirects/:id` | `manage_options` | Delete a redirect |
 | `GET /api/seo/404s` | `manage_options` | 404 log, most-hit first, paginated |
 | `DELETE /api/seo/404s?path=…` | `manage_options` | Dismiss one 404 path |
+| `GET /api/integrations` | `manage_options` | Integration registry with live configured/not-configured status |
+| `GET /api/integrations/:id/config` | `manage_options` | Non-secret config for one integration |
+| `PUT /api/integrations/:id/config` | `manage_options` | Set non-secret config; secret-looking fields are rejected with 400 |
+| `GET /api/integrations/email/log` | `manage_options` | Mail log (mock = logged, not delivered; HTTP = sent/failed) |
+| `GET /api/integrations/analytics/status` | `manage_options` | Analytics provider + measurement id, configured/not |
+| `GET /api/integrations/cloudflare` | `manage_options` | Bindings actually present in this environment (read-only) |
+| `GET /api/marketplace` | `install_plugins` | Marketplace extensions (local-ZIP skeleton) |
+| `POST /api/marketplace/install` | `install_plugins` | Install an extension from a ZIP upload (`wordless.json`, ≤2 MB) |
+| `POST /api/marketplace/:slug/activate\|deactivate` | `install_plugins` | Activate / deactivate an installed extension |
+| `GET /api/commerce/products` | —* | Published products only (admins may pass `?status=draft|all`) |
+| `POST /api/commerce/products` | `manage_options` | Create a product (price in integer minor units) |
+| `GET /api/commerce/products/:id` | —* | One product (drafts need `manage_options`) |
+| `PUT /api/commerce/products/:id` | `manage_options` | Update a product |
+| `DELETE /api/commerce/products/:id` | `manage_options` | Delete; refused when the product appears in any order |
+| `GET /api/commerce/cart` | — | Server-side cart for the `wordless_cart` cookie (sets it when new) |
+| `POST /api/commerce/cart` | — | Add to cart (stock-checked) |
+| `PUT /api/commerce/cart` | — | Set a line quantity (0 = remove) |
+| `DELETE /api/commerce/cart` | — | Clear the cart |
+| `POST /api/commerce/checkout` | — | Create a pending order + provider checkout; 503 when no provider is configured |
+| `GET /api/commerce/orders` | `manage_options` | Orders, paginated (`?status=`) |
+| `GET /api/commerce/orders/:id` | `manage_options` | One order with items |
+| `POST /api/commerce/orders/:id/transition` | `manage_options` | pending → paid → fulfilled / cancelled (validated) |
+| `GET /api/commerce/payments/providers` | `manage_options` | Payment providers with live configured state |
+| `GET /api/commerce/payments/selected` | `manage_options` | Selected provider + mode (test/live) |
+| `POST /api/commerce/payments/select` | `manage_options` | Select a provider + mode |
+| `POST /api/commerce/webhooks/:provider` | signature | Provider webhook (signature IS the auth; 401 on bad/missing) |
+| `GET /api/commerce/webhooks/log` | `manage_options` | Webhook attempts, paginated |
+| `GET /shop` | — | Public storefront (published products) |
+| `GET /shop/:slug` | — | Public product page (add-to-cart, share links) |
+| `GET /shop/cart` | — | Cart page + checkout form |
+| `POST /shop/cart/add\|remove\|quantity` | — | Cart form actions (303 back to the cart) |
+| `POST /shop/checkout` | — | Form checkout → provider checkout or the test page (mock) |
+| `GET /shop/checkout/test` | — | Mock test-checkout page (no money moves) |
+| `POST /shop/checkout/test` | — | Simulate a successful test payment via a signed mock webhook |
+| `GET /shop/checkout/success\|cancelled` | — | Checkout result page for an order |
 | `GET /admin` | — | React admin SPA (Static Assets; calls the real API, no fake data) |
 | `GET /api/ai/providers` | `manage_options` | Providers + configured state; Workers AI is the default |
 | `POST /api/ai/providers/select` | `manage_options` | Select a provider (`{ provider }`) |
@@ -728,6 +773,129 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - **Not commerce.** Email sending, payments, analytics and social
   publishing are Milestone 8; the content studio's AI ideas are
   drafts only.
+
+## What Milestone 8 is
+
+- **Integrations framework** (`src/modules/integrations/registry.ts`,
+  `config.ts`). A registry of 8 integrations (email, Paystack,
+  Flutterwave, Stripe, analytics, social, Cloudflare, marketplace)
+  with live configured/not-configured detection from env + stored
+  config. `GET /api/integrations` (list + status),
+  `GET/PUT /api/integrations/:id/config` (`manage_options`) — the config
+  endpoint stores **non-secret settings only**: any secret-looking
+  field (`key`, `token`, `secret`, `password`, `private`…) is rejected
+  with a 400 telling the admin to use `wrangler secret put`. Admin
+  `#/integrations` shows every integration's status honestly. The
+  Cloudflare entry is read-only and reports the bindings actually
+  present in this environment (DB/MEDIA/CONFIG/ASSETS/AI) — no IDs are
+  ever invented.
+- **Email** (`src/modules/integrations/email.ts`). `sendMail` with two
+  providers: a **mock** that records the message in D1 `wl_mail_log`
+  (status `logged`, never claims delivery) and a **generic HTTP provider**
+  (Resend/SendGrid-shaped) that POSTs to a configurable endpoint with
+  the key from env secrets, with a timeout and error mapping. Used by
+  order confirmations (best-effort, never fails the webhook), comment
+  notifications (to the site's `admin_email`, when set) and password
+  resets (the temporary password is still returned in the API response,
+  with an `emailed` flag). `GET /api/integrations/email/log`
+  (`manage_options`). Real delivery is **not verified here** — no mail
+  key is connected; the UI says "test mode — messages are logged, not
+  delivered" while the mock is active.
+- **Payments** (`src/modules/commerce/payments/`). A provider
+  abstraction (`createCheckout`, `verifyPayment`, `verifyWebhook`) with
+  real HMAC verification per provider's documented scheme: **Paystack**
+  HMAC-SHA512 on the raw body (`x-paystack-signature`, event
+  `charge.success`), **Flutterwave** `verif-hash` comparison against
+  `FLUTTERWAVE_SECRET_HASH` (event `charge.completed` + status
+  `successful`), **Stripe** HMAC-SHA256 of `${timestamp}.${rawBody}`
+  (`stripe-signature`, 300 s tolerance). Each has a deterministic
+  **mock provider** (test mode only; checkout opens the test page on
+  this site; webhook HMAC-SHA256 against `MOCK_PAYMENT_WEBHOOK_SECRET`
+  — unset means every mock webhook is rejected). Webhook endpoint
+  `POST /api/commerce/webhooks/:provider` — the signature IS the auth
+  (401 on bad/missing); every attempt is logged in `wl_webhook_log`
+  (provider + event + reference + result, never the secret). A paid
+  webhook moves the order pending→paid **exactly once** (idempotency
+  key = provider reference; a replay is answered "duplicate", 200).
+  **No live provider call has been verified here** — no keys are
+  connected; the implementations follow the providers' public docs.
+- **E-commerce core** (`src/modules/commerce/`). `wl_products`,
+  `wl_orders`, `wl_order_items`, `wl_carts`, `wl_mail_log`,
+  `wl_webhook_log` (migration `0008_m8.sql`, additive only). Products:
+  name, slug, block-HTML description, price in **integer minor units**
+  (kobo/cents — floats are rejected), currency (NGN default), stock
+  (integer, -1 = unlimited), draft/published, featured image attachment
+  id. `GET /api/commerce/products` (public, published only) + CRUD
+  (`manage_options`); delete is refused when the product appears in any
+  order. Public storefront at `/shop` and `/shop/:slug` (rendered
+  through the theme system, with add-to-cart and share links) and
+  `/shop/cart`. **Cart** is server-side in D1 (`wl_carts`, 7-day
+  expiry, pruned on read), keyed by the `wordless_cart` cookie —
+  `GET/POST/PUT/DELETE /api/commerce/cart`, stock-checked at add time.
+  **Checkout** (`POST /api/commerce/checkout`, form or API) validates a
+  non-empty cart + stock, creates a pending order with the customer's
+  name/email, then starts the provider checkout; with **no payment
+  provider configured it returns 503** — never a fake success. Orders:
+  `GET /api/commerce/orders` + detail + `POST .../transition`
+  (`manage_options`), pending → paid → fulfilled / cancelled, validated.
+  **Stock decrements exactly once** when an order becomes paid and is
+  restored when a paid order is cancelled (both tested). Money is
+  formatted from minor units everywhere (`formatMoney`).
+- **Commerce-assistant activation.** The M6 commerce-assistant is now
+  available: it reads real commerce data — product count, orders by
+  status, low-stock warnings (≤5), revenue = sum of paid orders in
+  minor units — all computed from stored rows, and reports only (it
+  never changes the store). Tested: the agent's report matches direct
+  queries. The `AI_COMPAT` entry and `docs/ai/agents.md` now say so.
+- **Social + analytics (config-only, honest).** Share links
+  (X/Facebook/WhatsApp/Telegram — plain URLs, no API calls, no fake
+  counts) on public post and product pages. Analytics config (provider
+  id + measurement id, non-secret) with
+  `GET /api/integrations/analytics/status`; the GA4/Plausible snippet
+  is injected into public pages **only when configured** — otherwise no
+  tracking pixel. No analytics, sales or social numbers are ever
+  fabricated: every number comes from the site's own stored rows.
+  The M6 email-composer and social-composer stay **draft-only**; the
+  command centre says sending is via the email integration only when
+  configured.
+- **Marketplace skeleton** (`src/modules/integrations/marketplace.ts`).
+  Install from a ZIP upload (`wordless.json` manifest with slug/name/
+  version/kind plugin|theme; ≤2 MB, ≤100 files, path traversal
+  rejected), files in R2 `extensions/<slug>/`, row in `wl_extensions`
+  (inactive), activate/deactivate via the admin Commerce → Marketplace
+  tab. No remote directory, and installed code is never executed by the
+  install itself.
+- **Compat registry:** separate `COMMERCE_COMPAT` (8 entries) and
+  `INTEGRATIONS_COMPAT` (6 entries) lists — Wordless-native surfaces,
+  deliberately not in `WORDPRESS_COMPAT`.
+- **Migration `0008_m8.sql` was needed** (additive only): `wl_products`,
+  `wl_orders`, `wl_order_items`, `wl_carts`, `wl_mail_log`,
+  `wl_webhook_log`. Existing local D1 databases need
+  `npx wrangler d1 migrations apply DB --local` before the commerce
+  routes work.
+- 321 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 8 is not
+
+- **Not verified live payments.** Paystack, Flutterwave and Stripe are
+  implemented from their public documentation with real HMAC webhook
+  verification, but no live call has been made and no key is connected.
+  Until a key is set and a real test-mode transaction is observed, the
+  providers are "implemented, not verified". The mock provider is the
+  only path exercised end to end here.
+- **Not verified live email.** The HTTP email provider is implemented
+  and the mock path is tested, but no message has been delivered to a
+  real inbox here. The mail log is the proof of what happened.
+- **Not a full store.** No variable products, coupons, taxes, shipping,
+  refunds, or WooCommerce's full API. No remote marketplace directory.
+  No social publishing (share links only) and no visitor analytics
+  (the analytics integration is configuration + snippet only).
+- **Not pattern rendering.** Block themes built from `wp:pattern`
+  blocks (e.g. Twenty Twenty-Five) still render nearly empty — the
+  M5 known gap, unchanged.
+- **Not backup or import.** Real backup/restore and the WordPress
+  (WXR) importer are Milestone 9; production readiness is Milestone 10.
 
 ## What Milestone 3 is
 

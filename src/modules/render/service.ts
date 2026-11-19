@@ -34,6 +34,15 @@ import {
 import { renderContent } from "./blocks";
 import { escapeHtml, layout, type NavItem } from "./theme";
 import { buildPageSeo } from "../seo/head";
+import { listProducts } from "../commerce/products";
+import type { Product } from "../commerce/types";
+import { formatMoney } from "../commerce/money";
+import { getCart } from "../commerce/cart";
+import { getOrder } from "../commerce/orders";
+import type { Cart, Order } from "../commerce/types";
+import { shareLinks } from "../integrations/social";
+import { buildAnalyticsSnippet } from "../integrations/analytics";
+import { siteUrl } from "../feeds/service";
 
 export interface RenderedPage {
   status: number;
@@ -48,6 +57,8 @@ export interface RenderOptions {
   variation?: Record<string, unknown>;
   /** Preview token (kept on the /theme.css URL so preview CSS loads). */
   previewToken?: string;
+  /** Cart token from the `wordless_cart` cookie (shop pages only). */
+  cartToken?: string;
 }
 
 async function siteInfo(db: Db): Promise<{ name: string; description: string }> {
@@ -152,7 +163,9 @@ async function finishPage(
     ...fallback,
     title: seo.title,
     description: seo.description,
-    headExtra: [fallback.headExtra ?? "", seo.headTags].filter((s) => s !== "").join("\n"),
+    headExtra: [fallback.headExtra ?? "", seo.headTags, (await buildAnalyticsSnippet(db)) ?? ""]
+      .filter((s) => s !== "")
+      .join("\n"),
   };
   if (opts?.storage !== undefined) {
     try {
@@ -176,7 +189,7 @@ async function finishPage(
               stylesheetHref: href,
               body: rendered.html,
               extraBody,
-              headExtra: seo.headTags,
+              headExtra: [seo.headTags, (await buildAnalyticsSnippet(db)) ?? ""].filter((s) => s !== "").join("\n"),
             }),
           };
         }
@@ -277,12 +290,14 @@ export async function renderSingle(db: Db, post: Post, opts?: RenderOptions): Pr
   const site = await siteInfo(db);
   const nav = await navItems(db);
   const comments = post.commentStatus === "open" || post.commentCount > 0 ? await commentsHtml(db, post) : "";
+  const postData = await toTemplatePost(db, post, true);
+  const share = shareLinks(`${await siteUrl(db)}${postData.url}`, post.title || "(untitled)");
+  const shareHtml = `<section class="share"><h2>Share this</h2><p><a href="${escapeHtml(share.x)}" target="_blank" rel="noreferrer">X</a> · <a href="${escapeHtml(share.facebook)}" target="_blank" rel="noreferrer">Facebook</a> · <a href="${escapeHtml(share.whatsapp)}" target="_blank" rel="noreferrer">WhatsApp</a> · <a href="${escapeHtml(share.telegram)}" target="_blank" rel="noreferrer">Telegram</a></p></section>`;
   const body = `<article>
 <h1>${escapeHtml(post.title || "(untitled)")}</h1>
 <div class="meta">${escapeHtml(formatDate(post.date))}</div>
 ${renderContent(post.content)}
-</article>${comments}`;
-  const postData = await toTemplatePost(db, post, true);
+</article>${shareHtml}${comments}`;
   return finishPage(
     db,
     opts,
@@ -457,5 +472,264 @@ export async function renderNotFound(db: Db, opts?: RenderOptions): Promise<Rend
       body: "<h1>Page not found</h1><p>The page you asked for does not exist. <a href=\"/\">Go home</a>.</p>",
       status: 404,
     },
+  );
+}
+
+// ---------------------------------------------------------------- shop (M8)
+// The storefront is server-rendered forms (no JavaScript): add-to-cart
+// and checkout post to /shop/* routes in src/index.ts, which redirect
+// back here. Prices are formatted from integer minor units (money.ts).
+
+function stockNote(product: Product): string {
+  if (product.stock < 0) return "";
+  if (product.stock === 0) return ` <span class="stock-out">Out of stock</span>`;
+  if (product.stock <= 5) return ` <span class="stock-low">Only ${product.stock} left</span>`;
+  return "";
+}
+
+/**
+ * Shop pages are rendered through the active block theme as a synthetic
+ * "page" post: the theme's page template renders `wp:post-title` (the
+ * page title) and `wp:post-content` (this HTML, injected raw). The
+ * fallback M2 layout uses the same HTML plus its own <h1>, so the two
+ * bodies differ only by that heading.
+ */
+function shopPost(title: string, url: string, contentHtml: string): TemplatePostData {
+  return { title, date: "", excerpt: "", contentHtml, url, commentCount: 0, terms: [] };
+}
+
+function addToCartForm(product: Product, redirectTo: string): string {
+  if (product.stock === 0) return "<p><em>Out of stock.</em></p>";
+  return `<form method="post" action="/shop/cart/add">
+<input type="hidden" name="productId" value="${product.id}">
+<input type="hidden" name="redirectTo" value="${escapeHtml(redirectTo)}">
+<label>Quantity <input type="number" name="quantity" value="1" min="1" max="99" style="width:4em"></label>
+<button type="submit">Add to cart</button>
+</form>`;
+}
+
+export async function renderShop(db: Db, page = 1, opts?: RenderOptions): Promise<RenderedPage> {
+  const site = await siteInfo(db);
+  const nav = await navItems(db);
+  const perPage = await getPostsPerPage(db);
+  const result = await listProducts(db, { status: "published", page, perPage });
+  const cart = opts?.cartToken !== undefined ? await getCart(db, opts.cartToken) : null;
+  const cartLink =
+    cart !== null && cart.lines.length > 0
+      ? `<p><a href="/shop/cart">View cart (${cart.lines.length} item${cart.lines.length === 1 ? "" : "s"} — ${escapeHtml(formatMoney(cart.totalMinor, cart.currency))})</a></p>`
+      : "";
+  const inner =
+    cartLink +
+    (result.products.length === 0
+      ? "<p>No products for sale yet.</p>"
+      : `<ul class="product-list">${result.products
+          .map(
+            (p) =>
+              `<li><h2><a href="/shop/${escapeHtml(p.slug)}">${escapeHtml(p.name)}</a></h2>` +
+              `<p class="price">${escapeHtml(formatMoney(p.priceMinor, p.currency))}</p>${stockNote(p)}` +
+              `${p.description ? `<p>${escapeHtml(p.description.slice(0, 200))}</p>` : ""}</li>`,
+          )
+          .join("")}</ul>` + pagination(page, result.totalPages, "/shop"));
+  const body = `<h1>Shop</h1>${inner}`;
+  return finishPage(
+    db,
+    opts,
+    {
+      siteName: site.name,
+      description: site.description,
+      nav,
+      kind: "page",
+      title: "Shop",
+      post: shopPost("Shop", "/shop", inner),
+      page,
+      totalPages: result.totalPages,
+      baseUrl: "/shop",
+    },
+    { title: "Shop", siteName: site.name, description: site.description, nav, body },
+  );
+}
+
+export async function renderProductPage(
+  db: Db,
+  product: Product,
+  opts?: RenderOptions,
+): Promise<RenderedPage> {
+  const site = await siteInfo(db);
+  const nav = await navItems(db);
+  const url = `/shop/${product.slug}`;
+  const share = shareLinks(`${await siteUrl(db)}${url}`, product.name);
+  const shareHtml = `<section class="share"><h2>Share this</h2><p><a href="${escapeHtml(share.x)}" target="_blank" rel="noreferrer">X</a> · <a href="${escapeHtml(share.facebook)}" target="_blank" rel="noreferrer">Facebook</a> · <a href="${escapeHtml(share.whatsapp)}" target="_blank" rel="noreferrer">WhatsApp</a> · <a href="${escapeHtml(share.telegram)}" target="_blank" rel="noreferrer">Telegram</a></p></section>`;
+  const inner = `<article>
+<p class="price">${escapeHtml(formatMoney(product.priceMinor, product.currency))}</p>${stockNote(product)}
+${product.description ? renderContent(product.description) : "<p>No description yet.</p>"}
+${addToCartForm(product, url)}
+<p><a href="/shop">&larr; Back to the shop</a></p>
+</article>
+${shareHtml}`;
+  const body = `<article>
+<h1>${escapeHtml(product.name)}</h1>
+<p class="price">${escapeHtml(formatMoney(product.priceMinor, product.currency))}</p>${stockNote(product)}
+${product.description ? renderContent(product.description) : "<p>No description yet.</p>"}
+${addToCartForm(product, url)}
+<p><a href="/shop">&larr; Back to the shop</a></p>
+</article>
+${shareHtml}`;
+  return finishPage(
+    db,
+    opts,
+    {
+      siteName: site.name,
+      description: site.description,
+      nav,
+      kind: "page",
+      title: product.name,
+      post: shopPost(product.name, url, inner),
+      page: 1,
+      totalPages: 1,
+      baseUrl: url,
+    },
+    { title: product.name, siteName: site.name, description: site.description, nav, body },
+  );
+}
+
+export async function renderCartPage(
+  db: Db,
+  cart: Cart,
+  opts?: RenderOptions,
+  notice?: string,
+): Promise<RenderedPage> {
+  const site = await siteInfo(db);
+  const nav = await navItems(db);
+  const lines =
+    cart.lines.length === 0
+      ? "<p>Your cart is empty.</p>"
+      : `<table><thead><tr><th>Product</th><th>Price</th><th>Quantity</th><th>Total</th><th></th></tr></thead><tbody>${cart.lines
+          .map(
+            (l) =>
+              `<tr><td><a href="/shop/${escapeHtml(l.slug)}">${escapeHtml(l.name)}</a></td>` +
+              `<td>${escapeHtml(formatMoney(l.priceMinor, l.currency))}</td>` +
+              `<td><form method="post" action="/shop/cart/quantity" style="display:inline"><input type="hidden" name="productId" value="${l.productId}"><input type="number" name="quantity" value="${l.quantity}" min="0" max="99" style="width:4em"><button type="submit">Update</button></form></td>` +
+              `<td>${escapeHtml(formatMoney(l.lineTotalMinor, l.currency))}</td>` +
+              `<td><form method="post" action="/shop/cart/remove" style="display:inline"><input type="hidden" name="productId" value="${l.productId}"><button type="submit">Remove</button></form></td></tr>`,
+          )
+          .join("")}</tbody></table>
+<p><strong>Total: ${escapeHtml(formatMoney(cart.totalMinor, cart.currency))}</strong></p>` +
+        (cart.currencyNote !== null ? `<p><em>${escapeHtml(cart.currencyNote)}</em></p>` : "") +
+        `<h2>Checkout</h2>
+<form method="post" action="/shop/checkout">
+<label for="checkout-name">Name</label>
+<input id="checkout-name" name="customerName" required maxlength="200">
+<label for="checkout-email">Email</label>
+<input id="checkout-email" name="customerEmail" type="email" required maxlength="100">
+<button type="submit">Continue to payment</button>
+</form>
+<p><small>Payment is processed by the store's configured payment provider. No payment provider is configured yet? The checkout will say so instead of taking your money.</small></p>`;
+  const body = `<h1>Your cart</h1>${notice !== undefined ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}${lines}<p><a href="/shop">&larr; Continue shopping</a></p>`;
+  const inner = `${notice !== undefined ? `<p class="notice">${escapeHtml(notice)}</p>` : ""}${lines}<p><a href="/shop">&larr; Continue shopping</a></p>`;
+  return finishPage(
+    db,
+    opts,
+    {
+      siteName: site.name,
+      description: site.description,
+      nav,
+      kind: "page",
+      title: "Your cart",
+      post: shopPost("Your cart", "/shop/cart", inner),
+      page: 1,
+      totalPages: 1,
+      baseUrl: "/shop/cart",
+    },
+    { title: "Your cart", siteName: site.name, description: site.description, nav, body },
+  );
+}
+
+/** Mock (test-mode) checkout page: explains that no money moves and offers the simulated payment. */
+export async function renderTestCheckout(
+  db: Db,
+  order: Order,
+  reference: string,
+  opts?: RenderOptions,
+): Promise<RenderedPage> {
+  const site = await siteInfo(db);
+  const nav = await navItems(db);
+  const body = `<h1>Test checkout</h1>
+<p><strong>This is a test checkout — no money moves.</strong> The store is using the mock payment provider (local development / tests only).</p>
+<p>Order ${escapeHtml(order.id)} — total ${escapeHtml(formatMoney(order.totalMinor, order.currency))}.</p>
+<form method="post" action="/shop/checkout/test">
+<input type="hidden" name="orderId" value="${escapeHtml(order.id)}">
+<input type="hidden" name="reference" value="${escapeHtml(reference)}">
+<button type="submit">Simulate successful payment (test only)</button>
+</form>
+<p><a href="/shop/cart">Back to cart</a></p>`;
+  const inner = `<p><strong>This is a test checkout — no money moves.</strong> The store is using the mock payment provider (local development / tests only).</p>
+<p>Order ${escapeHtml(order.id)} — total ${escapeHtml(formatMoney(order.totalMinor, order.currency))}.</p>
+<form method="post" action="/shop/checkout/test">
+<input type="hidden" name="orderId" value="${escapeHtml(order.id)}">
+<input type="hidden" name="reference" value="${escapeHtml(reference)}">
+<button type="submit">Simulate successful payment (test only)</button>
+</form>
+<p><a href="/shop/cart">Back to cart</a></p>`;
+  return finishPage(
+    db,
+    opts,
+    {
+      siteName: site.name,
+      description: site.description,
+      nav,
+      kind: "page",
+      title: "Test checkout",
+      post: shopPost("Test checkout", "/shop/checkout/test", inner),
+      page: 1,
+      totalPages: 1,
+      baseUrl: "/shop/checkout/test",
+    },
+    { title: "Test checkout", siteName: site.name, description: site.description, nav, body },
+  );
+}
+
+export async function renderCheckoutResult(
+  db: Db,
+  order: Order | null,
+  opts?: RenderOptions,
+): Promise<RenderedPage> {
+  const site = await siteInfo(db);
+  const nav = await navItems(db);
+  const body =
+    order === null
+      ? "<h1>Order not found</h1><p>We could not find that order. <a href=\"/shop\">Back to the shop</a>.</p>"
+      : `<h1>${order.status === "paid" || order.status === "fulfilled" ? "Thank you — your order is confirmed" : `Order ${escapeHtml(order.status)}`}</h1>
+<p>Order ${escapeHtml(order.id)} — ${escapeHtml(formatMoney(order.totalMinor, order.currency))}.</p>
+<ul>${order.items.map((i) => `<li>${escapeHtml(i.name)} × ${i.quantity} — ${escapeHtml(formatMoney(i.priceMinor * i.quantity, order.currency))}</li>`).join("")}</ul>
+<p>Status: <strong>${escapeHtml(order.status)}</strong>${order.status === "pending" ? " — payment has not been confirmed yet. If you paid, the provider webhook may still be on its way; this page refreshes the status." : ""}</p>
+<p><a href="/shop">Back to the shop</a></p>`;
+  const inner =
+    order === null
+      ? "<p>We could not find that order. <a href=\"/shop\">Back to the shop</a>.</p>"
+      : `<p>Order ${escapeHtml(order.id)} — ${escapeHtml(formatMoney(order.totalMinor, order.currency))}.</p>
+<ul>${order.items.map((i) => `<li>${escapeHtml(i.name)} × ${i.quantity} — ${escapeHtml(formatMoney(i.priceMinor * i.quantity, order.currency))}</li>`).join("")}</ul>
+<p>Status: <strong>${escapeHtml(order.status)}</strong>${order.status === "pending" ? " — payment has not been confirmed yet. If you paid, the provider webhook may still be on its way; this page refreshes the status." : ""}</p>
+<p><a href="/shop">Back to the shop</a></p>`;
+  return finishPage(
+    db,
+    opts,
+    {
+      siteName: site.name,
+      description: site.description,
+      nav,
+      kind: "page",
+      title: "Checkout",
+      post: shopPost(
+        order !== null && (order.status === "paid" || order.status === "fulfilled")
+          ? "Thank you — your order is confirmed"
+          : "Checkout",
+        "/shop/checkout/success",
+        inner,
+      ),
+      page: 1,
+      totalPages: 1,
+      baseUrl: "/shop/checkout/success",
+    },
+    { title: "Checkout", siteName: site.name, description: site.description, nav, body },
   );
 }

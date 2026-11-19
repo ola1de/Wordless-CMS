@@ -69,6 +69,7 @@ export function createTestDb(): TestDb {
   const migration5 = fileURLToPath(new URL("../../migrations/0005_m5.sql", import.meta.url));
   const migration6 = fileURLToPath(new URL("../../migrations/0006_m6.sql", import.meta.url));
   const migration7 = fileURLToPath(new URL("../../migrations/0007_m7.sql", import.meta.url));
+  const migration8 = fileURLToPath(new URL("../../migrations/0008_m8.sql", import.meta.url));
   // Applied in order, exactly as `wrangler d1 migrations apply` does.
   // (No 0003/0004 exist: M3 and M4 needed no schema change.)
   sqlite.exec(readFileSync(migration1, "utf8"));
@@ -76,6 +77,7 @@ export function createTestDb(): TestDb {
   sqlite.exec(readFileSync(migration5, "utf8"));
   sqlite.exec(readFileSync(migration6, "utf8"));
   sqlite.exec(readFileSync(migration7, "utf8"));
+  sqlite.exec(readFileSync(migration8, "utf8"));
   return {
     db: new SqliteDb(sqlite),
     sqlite,

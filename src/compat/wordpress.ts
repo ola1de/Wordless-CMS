@@ -376,7 +376,7 @@ export const AI_COMPAT: CompatEntry[] = [
   { name: "wl_ai_complete", level: "partial", description: "POST /api/ai/tasks — run an agent with the selected provider (Workers AI by default, mock in local dev). Fails honestly with ai_not_configured when no provider is configured." },
   { name: "wl_ai_providers", level: "partial", description: "GET /api/ai/providers (+ /select, /:id/test) — list providers with live configured state; Workers AI is the default, OpenAI-compatible is an optional fallback." },
   { name: "wl_ai_mode", level: "partial", description: "GET/PUT /api/ai/mode — manual / supervised / autonomous. The orchestrator enforces the mode; supervised never applies without approval." },
-  { name: "wl_ai_agents", level: "partial", description: "GET /api/ai/agents — the 15-agent roster with live availability (commerce-assistant is unavailable until Milestone 8)." },
+  { name: "wl_ai_agents", level: "partial", description: "GET /api/ai/agents — the 15-agent roster with live availability (commerce-assistant is live since Milestone 8, reading real store data)." },
   { name: "wl_ai_approve", level: "partial", description: "POST /api/ai/approvals/:id/approve|reject — human gate. Approving applies the proposal through the existing services; a failed apply leaves the approval pending." },
   { name: "wl_ai_memory", level: "partial", description: "GET/POST /api/ai/memory — website facts + admin notes used as agent context. Rebuild re-ingests from the site; notes never contain secrets." },
 ];
@@ -400,6 +400,39 @@ export const SEO_COMPAT: CompatEntry[] = [
   { name: "wl_seo_templates", level: "partial", description: "GET /api/seo/templates + POST /api/seo/templates/:slug/create — three content templates (announcement, how-to, news update) that create real draft posts." },
   { name: "wl_seo_calendar", level: "partial", description: "GET /api/seo/calendar — stored posts grouped by date for the next 30 days (a draft with a future date is the schedule; no 'future' status yet)." },
   { name: "wl_seo_import", level: "partial", description: "POST /api/seo/import — Yoast SEO (_yoast_wpseo_*) and Rank Math (rank_math_*) metadata import by post ID or slug; unknown keys and invalid rows are reported, never silently dropped." },
+];
+
+/**
+ * Wordless commerce API surface (Milestone 8) — NOT WordPress functions,
+ * so they live in a separate list. "partial" means the endpoint exists
+ * and works, with the documented M8 limits (no live provider call has
+ * been verified here — no keys connected; no variable products, coupons,
+ * taxes or shipping; no refunds).
+ */
+export const COMMERCE_COMPAT: CompatEntry[] = [
+  { name: "wl_commerce_products", level: "partial", description: "GET /api/commerce/products (public, published only) + POST/PUT/DELETE (manage_options). Products: name, slug, block-HTML description, price in integer minor units, currency (NGN default), stock (-1 = unlimited), draft/published, featured image attachment id." },
+  { name: "wl_commerce_shop", level: "partial", description: "Public storefront at /shop (list) and /shop/:slug (product page, add-to-cart form, share links), rendered through the theme system; /shop/cart shows the server-side cart with checkout form." },
+  { name: "wl_commerce_cart", level: "partial", description: "GET/POST/PUT/DELETE /api/commerce/cart — server-side cart in D1 (wl_carts, 7-day expiry, pruned on read), keyed by the wordless_cart cookie. Stock is checked at add time." },
+  { name: "wl_commerce_checkout", level: "partial", description: "POST /api/commerce/checkout — validates a non-empty cart + stock, creates a pending order, starts a checkout with the selected provider. With no provider configured it returns 503 — never a fake success." },
+  { name: "wl_commerce_orders", level: "partial", description: "GET /api/commerce/orders (+ /:id) and POST /api/commerce/orders/:id/transition — pending → paid → fulfilled / cancelled. Stock decrements exactly once when an order becomes paid and is restored when a paid order is cancelled." },
+  { name: "wl_commerce_payments", level: "partial", description: "Payment providers: Paystack (HMAC-SHA512 webhook), Flutterwave (verif-hash), Stripe (HMAC-SHA256, 300 s timestamp tolerance), plus a deterministic mock for test mode. GET /api/commerce/payments/providers + /selected + POST /select. Secrets live only in env/secrets." },
+  { name: "wl_commerce_webhooks", level: "partial", description: "POST /api/commerce/webhooks/:provider — the provider signature IS the auth (401 on bad/missing). Every attempt is logged in wl_webhook_log. A paid webhook moves the order pending → paid exactly once; replays are idempotent." },
+  { name: "wl_commerce_assistant", level: "partial", description: "The commerce-assistant AI agent (M6) is live since M8: it reports real products, order counts by status, low-stock warnings and revenue (sum of paid orders, minor units), computed from stored rows only." },
+];
+
+/**
+ * Wordless integrations surface (Milestone 8) — the integration registry,
+ * email, analytics, social and the marketplace skeleton. Config stores
+ * non-secret settings only; secrets are rejected with a 400 and must be
+ * set via wrangler secrets / env.
+ */
+export const INTEGRATIONS_COMPAT: CompatEntry[] = [
+  { name: "wl_integrations", level: "partial", description: "GET /api/integrations (+ /:id/config GET/PUT) — registry of 8 integrations (email, paystack, flutterwave, stripe, analytics, social, cloudflare, marketplace) with live configured/not-configured detection from env." },
+  { name: "wl_integrations_email", level: "partial", description: "sendMail — mock provider logs to wl_mail_log in test mode (never claims delivery); generic HTTP provider (Resend/SendGrid-shaped) sends via a configured endpoint + secret. Used for order confirmations, comment notifications and password resets. GET /api/integrations/email/log (admin)." },
+  { name: "wl_integrations_analytics", level: "partial", description: "GET /api/integrations/analytics/status — GA4/Plausible configuration (provider id + measurement id, non-secret). The snippet is injected only when configured. No traffic numbers are ever fabricated." },
+  { name: "wl_integrations_social", level: "partial", description: "Share links (X/Facebook/WhatsApp/Telegram) on public post and product pages — plain links, no API calls, no fake counts." },
+  { name: "wl_integrations_cloudflare", level: "partial", description: "GET /api/integrations/cloudflare — read-only display of the bindings actually present in this environment (DB, MEDIA, CONFIG, ASSETS, AI). No IDs are invented." },
+  { name: "wl_integrations_marketplace", level: "partial", description: "GET /api/marketplace + POST /api/marketplace/install (ZIP upload, wordless.json manifest, ≤2 MB / ≤100 files) + activate/deactivate. Local-ZIP skeleton only — no remote directory, and installed code is never executed by the install." },
 ];
 
 export type { Role };

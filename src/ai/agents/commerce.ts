@@ -1,27 +1,64 @@
 /**
- * Commerce assistant (Milestone 6) — honestly UNAVAILABLE.
+ * Commerce assistant (Milestone 8) — now available.
  *
- * Commerce (products, orders, payments) arrives in Milestone 8. There is
- * no product data to work with yet, so this agent has no handler that
- * could do real work. The registry marks it unavailable with this reason
- * and the command centre shows it as such; task creation for it is
- * rejected with the same reason. It is listed here (not hidden) so the
- * roster is complete and the gap is visible.
+ * Reads the store's own data only: products, orders by status,
+ * revenue (paid + fulfilled orders, in minor units), and low-stock
+ * warnings. Every number is computed from wl_products / wl_orders —
+ * nothing is invented, and the report says so. Drafts and proposals
+ * are not part of this agent: it reports, it does not change the store.
  */
 import type { AgentDefinition } from "../types";
+import { listOrders } from "../../modules/commerce/orders";
+import { listProducts } from "../../modules/commerce/products";
+import { formatMoney } from "../../modules/commerce/money";
+
+const LOW_STOCK_AT_OR_BELOW = 5;
 
 export const commerceAssistant: AgentDefinition = {
   id: "commerce-assistant",
   name: "Commerce Assistant",
   description:
-    "Will help with products, orders and payments when commerce lands in Milestone 8. Not available yet — there is no product or order data to work with.",
-  capabilities: ["Products and orders (Milestone 8)", "Payments (Milestone 8)"],
-  risk: "high",
+    "Reports on the store from its own data: products, orders by status, revenue from paid orders, and low-stock warnings. It reports only — it never changes products or orders.",
+  capabilities: ["Product and order reports", "Revenue totals (paid orders only)", "Low-stock warnings"],
+  risk: "low",
   requiresProvider: false,
-  unavailableReason:
-    "Commerce (products, orders, payments) arrives in Milestone 8. This agent cannot run until then.",
-  async run(): Promise<never> {
-    // Unreachable: the orchestrator rejects tasks for unavailable agents.
-    throw new Error("Commerce assistant is unavailable until Milestone 8.");
+  async run(ctx) {
+    const { products } = await listProducts(ctx.db, { perPage: 100 });
+    const { orders } = await listOrders(ctx.db, { perPage: 100 });
+    const byStatus: Record<string, number> = { pending: 0, paid: 0, fulfilled: 0, cancelled: 0 };
+    let revenueMinor = 0;
+    let revenueCurrency = "NGN";
+    for (const order of orders) {
+      byStatus[order.status] = (byStatus[order.status] ?? 0) + 1;
+      if (order.status === "paid" || order.status === "fulfilled") {
+        revenueMinor += order.totalMinor;
+        revenueCurrency = order.currency;
+      }
+    }
+    const published = products.filter((p) => p.status === "published");
+    const lowStock = products
+      .filter((p) => p.stock >= 0 && p.stock <= LOW_STOCK_AT_OR_BELOW)
+      .map((p) => ({ id: p.id, name: p.name, slug: p.slug, stock: p.stock }));
+    const lines = [
+      `${products.length} product(s) (${published.length} published).`,
+      `${orders.length} order(s): ${byStatus.pending} pending, ${byStatus.paid} paid, ${byStatus.fulfilled} fulfilled, ${byStatus.cancelled} cancelled.`,
+      `Revenue from paid + fulfilled orders: ${formatMoney(revenueMinor, revenueCurrency)}.`,
+      lowStock.length > 0
+        ? `Low stock (≤ ${LOW_STOCK_AT_OR_BELOW}): ${lowStock.map((p) => `${p.name} (${p.stock})`).join(", ")}.`
+        : "No products are low on stock.",
+    ];
+    return {
+      summary: lines.join(" "),
+      data: {
+        products: products.length,
+        published: published.length,
+        orders: orders.length,
+        ordersByStatus: byStatus,
+        revenueMinor,
+        revenueCurrency,
+        revenueFormatted: formatMoney(revenueMinor, revenueCurrency),
+        lowStock,
+      },
+    };
   },
 };

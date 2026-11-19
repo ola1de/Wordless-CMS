@@ -12,20 +12,31 @@ import type {
   AiProvidersResponse,
   AiTask,
   AiTaskList,
+  AnalyticsStatus,
+  BindingStatus,
   ContentCalendar,
   ContentTemplate,
   ConversionJob,
   ConversionJobList,
   ExtensionRecord,
+  IntegrationInfo,
+  MailLogList,
+  MarketplaceExtension,
   MediaItem,
   MemoryEntry,
   MemoryList,
   NotFoundList,
+  Order,
+  OrderList,
+  PaymentProviderInfo,
   PostSeo,
   PreviewToken,
+  Product,
+  ProductList,
   ProviderInfo,
   RedirectList,
   RedirectRecord,
+  SelectedPayment,
   SeoAnalysis,
   SeoImportResult,
   Settings,
@@ -33,6 +44,7 @@ import type {
   ThemeRecord,
   ThemeVariation,
   User,
+  WebhookLogList,
 } from "./types";
 
 export class ApiError extends Error {
@@ -292,5 +304,92 @@ export const api = {
   },
   deleteNotFound(path: string): Promise<{ deleted: boolean }> {
     return request<{ deleted: boolean }>(`/api/seo/404s?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+  },
+
+  /** Commerce + integrations (Milestone 8). */
+  listProducts(page = 1): Promise<ProductList> {
+    return request<ProductList>(`/api/commerce/products?status=all&page=${page}`);
+  },
+  createProduct(input: {
+    name: string;
+    slug?: string;
+    description?: string;
+    priceMinor: number;
+    currency?: string;
+    stock?: number;
+    status?: "draft" | "published";
+    featuredImageId?: number;
+  }): Promise<Product> {
+    return request<Product>("/api/commerce/products", { method: "POST", body: JSON.stringify(input) });
+  },
+  updateProduct(id: number, patch: Partial<Product>): Promise<Product> {
+    return request<Product>(`/api/commerce/products/${id}`, { method: "PUT", body: JSON.stringify(patch) });
+  },
+  deleteProduct(id: number): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/commerce/products/${id}`, { method: "DELETE" });
+  },
+  listOrders(page = 1): Promise<OrderList> {
+    return request<OrderList>(`/api/commerce/orders?page=${page}`);
+  },
+  getOrder(id: string): Promise<Order> {
+    return request<Order>(`/api/commerce/orders/${encodeURIComponent(id)}`);
+  },
+  transitionOrder(id: string, status: "paid" | "fulfilled" | "cancelled"): Promise<Order> {
+    return request<Order>(`/api/commerce/orders/${encodeURIComponent(id)}/transition`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    });
+  },
+  listPaymentProviders(): Promise<PaymentProviderInfo[]> {
+    return request<PaymentProviderInfo[]>("/api/commerce/payments/providers");
+  },
+  getSelectedPayment(): Promise<SelectedPayment> {
+    return request<SelectedPayment>("/api/commerce/payments/selected");
+  },
+  selectPayment(provider: string, mode: "test" | "live"): Promise<SelectedPayment> {
+    return request<SelectedPayment>("/api/commerce/payments/select", {
+      method: "POST",
+      body: JSON.stringify({ provider, mode }),
+    });
+  },
+  listWebhookLog(page = 1): Promise<WebhookLogList> {
+    return request<WebhookLogList>(`/api/commerce/webhooks/log?page=${page}`);
+  },
+  listIntegrations(): Promise<IntegrationInfo[]> {
+    return request<IntegrationInfo[]>("/api/integrations");
+  },
+  getIntegrationConfig(id: string): Promise<Record<string, unknown>> {
+    return request<Record<string, unknown>>(`/api/integrations/${encodeURIComponent(id)}/config`);
+  },
+  updateIntegrationConfig(id: string, config: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return request<Record<string, unknown>>(`/api/integrations/${encodeURIComponent(id)}/config`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    });
+  },
+  listMailLog(page = 1): Promise<MailLogList> {
+    return request<MailLogList>(`/api/integrations/email/log?page=${page}`);
+  },
+  getAnalyticsStatus(): Promise<AnalyticsStatus> {
+    return request<AnalyticsStatus>("/api/integrations/analytics/status");
+  },
+  getCloudflareBindings(): Promise<BindingStatus[]> {
+    return request<BindingStatus[]>("/api/integrations/cloudflare");
+  },
+  listMarketplace(): Promise<MarketplaceExtension[]> {
+    return request<MarketplaceExtension[]>("/api/marketplace");
+  },
+  async installMarketplaceZip(file: File): Promise<MarketplaceExtension> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/marketplace/install", { method: "POST", credentials: "same-origin", body: form });
+    const body = (await res.json()) as Envelope<MarketplaceExtension>;
+    if (!res.ok || !body.ok) {
+      throw new ApiError(res.status, body.error?.message ?? `Install failed (${res.status}).`);
+    }
+    return body.data as MarketplaceExtension;
+  },
+  setMarketplaceStatus(slug: string, status: "activate" | "deactivate"): Promise<MarketplaceExtension> {
+    return request<MarketplaceExtension>(`/api/marketplace/${encodeURIComponent(slug)}/${status}`, { method: "POST" });
   },
 };
