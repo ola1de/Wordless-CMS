@@ -39,10 +39,13 @@ import {
   saveVariation,
 } from "./service";
 import { setOption } from "../options/service";
+import { execRun, queryOne } from "../../db";
+import type { Db } from "../../db";
 import {
   DEFAULT_THEME_FILES,
   DEFAULT_THEME_JSON,
   DEFAULT_THEME_STYLE_CSS,
+  DEFAULT_THEME_VERSION,
 } from "./default-theme";
 
 const MINIMAL_V3 = {
@@ -452,8 +455,114 @@ describe("theme ZIP import", () => {
       expect(themes[0]?.slug).toBe("wordless-default");
       expect(themes[0]?.status).toBe("active");
       const loaded = await loadActiveTheme(tdb.db, new InMemoryMediaStorage());
-      expect(loaded.stylesheet).toContain("--wp--preset--color--primary: #2563EB;");
+      expect(loaded.stylesheet).toContain("--wp--preset--color--primary: #0D9488;");
       expect(loaded.files.has("templates/single.html")).toBe(true);
+    } finally {
+      tdb.close();
+    }
+  });
+});
+
+describe("built-in default theme refresh on upgrade", () => {
+  async function seedThemeRow(
+    db: Db,
+    row: { slug: string; version: string; stylesheet: string; source: string },
+  ): Promise<void> {
+    await execRun(
+      db,
+      `INSERT INTO wl_themes
+       (slug, name, version, author, kind, status, theme_json, stylesheet, stylesheet_hash, source, report_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.slug,
+        row.slug,
+        row.version,
+        "Wordless",
+        "block",
+        "active",
+        "{}",
+        row.stylesheet,
+        "stale-hash",
+        row.source,
+        null,
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-01T00:00:00.000Z",
+      ],
+    );
+  }
+
+  it("refreshes a stale built-in row when the bundled theme is newer", async () => {
+    const tdb = createTestDb();
+    try {
+      await seedThemeRow(tdb.db, {
+        slug: "wordless-default",
+        version: "0.5.0",
+        stylesheet: "/* stale */",
+        source: "builtin",
+      });
+      const themes = await listThemes(tdb.db);
+      const def = themes.find((t) => t.slug === "wordless-default");
+      expect(def?.version).toBe(DEFAULT_THEME_VERSION);
+      expect(def?.version).not.toBe("0.5.0");
+      const stored = await queryOne<{ stylesheet: string; stylesheet_hash: string }>(
+        tdb.db,
+        "SELECT stylesheet, stylesheet_hash FROM wl_themes WHERE slug = 'wordless-default'",
+      );
+      expect(stored?.stylesheet).toContain(".post-card");
+      expect(stored?.stylesheet_hash).not.toBe("stale-hash");
+    } finally {
+      tdb.close();
+    }
+  });
+
+  it("never downgrades a built-in row newer than the bundle", async () => {
+    const tdb = createTestDb();
+    try {
+      await seedThemeRow(tdb.db, {
+        slug: "wordless-default",
+        version: "9.9.9",
+        stylesheet: "/* newer */",
+        source: "builtin",
+      });
+      await listThemes(tdb.db);
+      const stored = await queryOne<{ version: string; stylesheet: string }>(
+        tdb.db,
+        "SELECT version, stylesheet FROM wl_themes WHERE slug = 'wordless-default'",
+      );
+      expect(stored?.version).toBe("9.9.9");
+      expect(stored?.stylesheet).toBe("/* newer */");
+    } finally {
+      tdb.close();
+    }
+  });
+
+  it("leaves imported and custom themes alone", async () => {
+    const tdb = createTestDb();
+    try {
+      await seedThemeRow(tdb.db, {
+        slug: "wordless-default",
+        version: "0.5.0",
+        stylesheet: "/* stale */",
+        source: "builtin",
+      });
+      await seedThemeRow(tdb.db, {
+        slug: "custom",
+        version: "1.0.0",
+        stylesheet: "/* custom */",
+        source: "imported",
+      });
+      await listThemes(tdb.db);
+      const custom = await queryOne<{ version: string; stylesheet: string }>(
+        tdb.db,
+        "SELECT version, stylesheet FROM wl_themes WHERE slug = 'custom'",
+      );
+      expect(custom?.version).toBe("1.0.0");
+      expect(custom?.stylesheet).toBe("/* custom */");
+      const def = await queryOne<{ version: string }>(
+        tdb.db,
+        "SELECT version FROM wl_themes WHERE slug = 'wordless-default'",
+      );
+      expect(def?.version).toBe(DEFAULT_THEME_VERSION);
     } finally {
       tdb.close();
     }

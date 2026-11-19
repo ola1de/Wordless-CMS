@@ -3,6 +3,7 @@ import { api, ApiError } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import type { PostList } from "../lib/types";
 import { Badge, EmptyState, ErrorBox, Pagination, Spinner } from "../components/ui";
+import { Icon } from "../components/icons";
 
 const STATUSES = ["", "publish", "draft", "trash"];
 
@@ -88,11 +89,13 @@ export function PostsPage({ type, timezone }: { type: "post" | "page"; timezone:
             setPage(1);
           }}
         >
+          <Icon name="search" size={16} />
           Search
         </button>
         <span className="spacer" />
         <a href={`${editBase}/new`}>
           <button type="button" className="primary">
+            <Icon name="plus" size={16} />
             Add new {type === "page" ? "page" : "post"}
           </button>
         </a>

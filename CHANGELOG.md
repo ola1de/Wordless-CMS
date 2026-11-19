@@ -8,6 +8,26 @@ verified by read-back. Nothing is listed here that the tests do not
 cover; the honest limits for each milestone live in `README.md` and
 `docs/IMPLEMENTATION_STATUS.md`.
 
+## Unreleased — UI redesign (post-1.0.0)
+
+**Tests: 420 passed, 4 skipped (424 total, 44 files).** Smoke test: 27/27.
+
+- **Modern admin + public theme:** full visual redesign (CSS/markup/icons
+  only — no API, route or data changes, no new dependencies, no
+  network-fetched assets). Deep-teal design system (design tokens,
+  spacing scale, 12px radii, soft shadows, focus rings), a custom
+  45-icon inline-SVG set, grouped sidebar navigation with a mobile
+  drawer, a modern login card, stat cards with icon chips, and the
+  public default theme rebranded (post/product cards, sticky blurred
+  header, pill buttons). Verified visually from retaken screenshots.
+- **Built-in theme upgrades:** default theme bumped to 0.6.0.
+  `ensureDefaultTheme` now refreshes the built-in row when the bundled
+  theme is newer, so an existing install picks up theme updates instead
+  of keeping the old stylesheet forever. Imported/custom themes are
+  never touched, a row newer than the bundle is never downgraded, and
+  customizer variations (stored as options, not in the theme row) are
+  untouched. Covered by 3 new tests.
+
 ## 1.0.0 — 2026-11-19 (Milestone 10: Production readiness)
 
 **Tests: 417 passed, 4 skipped (421 total, 44 files).** Commit: `c1f1a16`

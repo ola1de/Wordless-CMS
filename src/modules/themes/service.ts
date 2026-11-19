@@ -9,7 +9,8 @@
  *   files live in the in-code bundle (default-theme.ts, generated from
  *   themes/wordless-default/) because the Worker cannot read repo files
  *   at runtime. Its D1 row is seeded lazily the first time any theme
- *   read happens on a fresh install.
+ *   read happens on a fresh install, and refreshed when the bundled
+ *   theme version is newer than the stored row (upgrade).
  * - The active theme is the `active_theme` option (default
  *   "wordless-default"); wl_themes.status mirrors it.
  * - Customizer variations are options (`wl_theme_variation_<slug>`);
@@ -132,31 +133,65 @@ function defaultThemeRow(now: string): ThemeRow {
   };
 }
 
-/** Insert the default theme row when the table is empty (fresh install). */
+/** Compare two "x.y.z" versions: -1 when a < b, 0 when equal, 1 when a > b. */
+function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Insert the default theme row when the table is empty (fresh install), or
+ * refresh the built-in row when the bundled theme is newer (upgrade), so an
+ * existing install picks up a redesigned default theme. Only the built-in
+ * row is ever refreshed: imported/custom themes are left alone, a row
+ * newer than the bundle is never downgraded, and customizer variations
+ * (stored as options, not in this row) are untouched.
+ */
 export async function ensureDefaultTheme(db: Db): Promise<void> {
   const count = await queryOne<{ n: number }>(db, "SELECT COUNT(*) AS n FROM wl_themes");
-  if ((count?.n ?? 0) > 0) return;
   const row = defaultThemeRow(nowIso());
+  if ((count?.n ?? 0) === 0) {
+    await execRun(
+      db,
+      `INSERT OR IGNORE INTO wl_themes
+       (slug, name, version, author, kind, status, theme_json, stylesheet, stylesheet_hash, source, report_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.slug,
+        row.name,
+        row.version,
+        row.author,
+        row.kind,
+        row.status,
+        row.theme_json,
+        row.stylesheet,
+        row.stylesheet_hash,
+        row.source,
+        row.report_json,
+        row.created_at,
+        row.updated_at,
+      ],
+    );
+    return;
+  }
+  const existing = await queryOne<{ version: string }>(
+    db,
+    "SELECT version FROM wl_themes WHERE slug = ? AND source = 'builtin' LIMIT 1",
+    [DEFAULT_SLUG],
+  );
+  if (existing === null) return;
+  if (compareSemver(DEFAULT_THEME_VERSION, existing.version) <= 0) return;
   await execRun(
     db,
-    `INSERT OR IGNORE INTO wl_themes
-     (slug, name, version, author, kind, status, theme_json, stylesheet, stylesheet_hash, source, report_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      row.slug,
-      row.name,
-      row.version,
-      row.author,
-      row.kind,
-      row.status,
-      row.theme_json,
-      row.stylesheet,
-      row.stylesheet_hash,
-      row.source,
-      row.report_json,
-      row.created_at,
-      row.updated_at,
-    ],
+    `UPDATE wl_themes
+     SET theme_json = ?, stylesheet = ?, stylesheet_hash = ?, version = ?, updated_at = ?
+     WHERE slug = ? AND source = 'builtin'`,
+    [row.theme_json, row.stylesheet, row.stylesheet_hash, row.version, row.updated_at, DEFAULT_SLUG],
   );
 }
 

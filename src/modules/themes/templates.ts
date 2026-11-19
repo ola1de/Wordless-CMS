@@ -304,7 +304,7 @@ function renderTemplateBlock(block: TemplateBlock, ctx: TemplateContext, state: 
         return `<p>No posts found.</p>`;
       }
       return posts
-        .map((post) => renderBlocks(template.children, { ...ctx, post }, state))
+        .map((post) => `<article class="post-card">${renderBlocks(template.children, { ...ctx, post }, state)}</article>`)
         .join("\n");
     }
     case "post-template":

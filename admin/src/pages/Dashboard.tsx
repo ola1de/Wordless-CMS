@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import type { ActivityItem, ActivityList, HealthCheck, PostList, CommentList } from "../lib/types";
 import { EmptyState, ErrorBox, Spinner } from "../components/ui";
+import { Icon } from "../components/icons";
 
 export function DashboardPage({ timezone }: { timezone: string }): React.ReactElement {
   const [health, setHealth] = useState<HealthCheck[] | null>(null);
@@ -43,20 +44,40 @@ export function DashboardPage({ timezone }: { timezone: string }): React.ReactEl
       {error ? <ErrorBox message={error} onDismiss={() => setError(null)} /> : null}
       <div className="grid">
         <div className="stat">
-          <div className="num">{posts?.total ?? "—"}</div>
-          <div className="lbl">Posts</div>
+          <span className="stat-icon">
+            <Icon name="posts" size={21} />
+          </span>
+          <div>
+            <div className="num">{posts?.total ?? "—"}</div>
+            <div className="lbl">Posts</div>
+          </div>
         </div>
         <div className="stat">
-          <div className="num">{comments?.total ?? "—"}</div>
-          <div className="lbl">Comments awaiting moderation</div>
+          <span className="stat-icon">
+            <Icon name="comments" size={21} />
+          </span>
+          <div>
+            <div className="num">{comments?.total ?? "—"}</div>
+            <div className="lbl">Comments awaiting moderation</div>
+          </div>
         </div>
         <div className="stat">
-          <div className="num">{critical}</div>
-          <div className="lbl">Critical health issues</div>
+          <span className="stat-icon danger">
+            <Icon name="alert" size={21} />
+          </span>
+          <div>
+            <div className="num">{critical}</div>
+            <div className="lbl">Critical health issues</div>
+          </div>
         </div>
         <div className="stat">
-          <div className="num">{recommended}</div>
-          <div className="lbl">Recommended health fixes</div>
+          <span className="stat-icon warn">
+            <Icon name="checkCircle" size={21} />
+          </span>
+          <div>
+            <div className="num">{recommended}</div>
+            <div className="lbl">Recommended health fixes</div>
+          </div>
         </div>
       </div>
 

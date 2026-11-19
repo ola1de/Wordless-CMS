@@ -12,12 +12,12 @@
           "slug": "base"
         },
         {
-          "color": "#1A1A1A",
+          "color": "#122019",
           "name": "Contrast",
           "slug": "contrast"
         },
         {
-          "color": "#2563EB",
+          "color": "#0D9488",
           "name": "Primary",
           "slug": "primary"
         },
@@ -27,7 +27,7 @@
           "slug": "secondary"
         },
         {
-          "color": "#0D9488",
+          "color": "#0F766E",
           "name": "Accent",
           "slug": "accent"
         },
@@ -39,7 +39,7 @@
       ]
     },
     "custom": {
-      "radius": "6px"
+      "radius": "12px"
     },
     "layout": {
       "contentSize": "680px",

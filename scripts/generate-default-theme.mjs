@@ -44,7 +44,7 @@ const out = `/**
  */
 export const DEFAULT_THEME_SLUG = "wordless-default";
 export const DEFAULT_THEME_NAME = "Wordless";
-export const DEFAULT_THEME_VERSION = "0.5.0";
+export const DEFAULT_THEME_VERSION = "0.6.0";
 export const DEFAULT_THEME_AUTHOR = "Wordless";
 
 export const DEFAULT_THEME_JSON: Record<string, unknown> = ${JSON.stringify(themeJson, null, 2)};
