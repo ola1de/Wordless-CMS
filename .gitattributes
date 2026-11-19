@@ -1,0 +1,5 @@
+# WORDLESS line endings: always LF, on every platform.
+# Without this, git on Windows (core.autocrlf=true) checks text files out
+# with CRLF, which breaks the byte-for-byte theme-bundle test and makes
+# the generated default theme differ between platforms.
+* text=auto eol=lf

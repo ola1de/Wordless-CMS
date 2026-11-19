@@ -8,6 +8,18 @@ verified by read-back. Nothing is listed here that the tests do not
 cover; the honest limits for each milestone live in `README.md` and
 `docs/IMPLEMENTATION_STATUS.md`.
 
+## Unreleased — Windows CRLF fix
+
+- **Windows line-ending fix:** `npm test` failed on Windows with
+  `default theme bundle > matches the repo source files byte for byte`
+  because git on Windows (`core.autocrlf=true`) checks text files out
+  with CRLF while the generated theme bundle is LF. The test now
+  normalises line endings before comparing, the default-theme
+  generator emits LF on every platform, and a new `.gitattributes`
+  (`* text=auto eol=lf`) pins LF checkouts. Found from a real Windows
+  deploy attempt — the pre-deploy checks correctly refused to deploy
+  with a failing test.
+
 ## 1.1.0 — Milestone 11: bigger uploads, plugin compatibility, auto-convert, Elementor rendering, file manager
 
 **Tests: 465 passed, 4 skipped (469 total, 48 files).** Smoke test: 48/48 (`smoke-m11.sh`, port 8796).

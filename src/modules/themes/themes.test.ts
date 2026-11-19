@@ -360,6 +360,11 @@ describe("template hierarchy + rendering", () => {
 });
 
 describe("default theme bundle", () => {
+  // Line endings are normalised before comparing: git on Windows
+  // (core.autocrlf=true) checks text files out with CRLF, while the
+  // generated bundle is always LF. The comparison is about content,
+  // not about which line endings the checkout happens to use.
+  const lf = (s: string) => s.replace(/\r\n/g, "\n");
   it("matches the repo source files byte for byte", () => {
     const repoJson = JSON.parse(
       readFileSync(fileURLToPath(new URL("../../../themes/wordless-default/theme.json", import.meta.url)), "utf8"),
@@ -369,13 +374,13 @@ describe("default theme bundle", () => {
       fileURLToPath(new URL("../../../themes/wordless-default/style.css", import.meta.url)),
       "utf8",
     );
-    expect(DEFAULT_THEME_STYLE_CSS.trim()).toBe(repoCss.trim());
+    expect(lf(DEFAULT_THEME_STYLE_CSS.trim())).toBe(lf(repoCss.trim()));
     for (const [path, content] of Object.entries(DEFAULT_THEME_FILES)) {
       const repo = readFileSync(
         fileURLToPath(new URL(`../../../themes/wordless-default/${path}`, import.meta.url)),
         "utf8",
       );
-      expect(content.trim(), path).toBe(repo.trim());
+      expect(lf(content.trim()), path).toBe(lf(repo.trim()));
     }
   });
 

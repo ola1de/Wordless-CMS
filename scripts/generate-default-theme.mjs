@@ -19,7 +19,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const THEME_DIR = join(ROOT, "themes", "wordless-default");
 
 function read(rel) {
-  return readFileSync(join(THEME_DIR, rel), "utf8");
+  // Normalise line endings: a Windows checkout (or an editor) may hold
+  // these files with CRLF; the generated bundle must be identical on
+  // every platform, so the bundle is always LF.
+  return readFileSync(join(THEME_DIR, rel), "utf8").replace(/\r\n/g, "\n");
 }
 
 function listDir(rel) {
