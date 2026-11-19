@@ -10,13 +10,14 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 2 — Core CMS (in development).** The kernel, D1
+> **Status: Milestone 3 — Admin + editor (in development).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
-> activity log, compat registry and admin shell are built and tested. The
-> conversion engine, AI agents, visual editor, commerce and integrations are
-> **not built yet** — see [What M2 is not](#what-milestone-2-is-not) below.
-> Nothing unfinished is presented as done.
+> activity log, compat registry and the React admin SPA with a Gutenberg
+> block editor are built and tested. The conversion engine, AI agents,
+> visual theme editor, commerce and integrations are **not built yet** — see
+> [What M3 is not](#what-milestone-3-is-not) below. Nothing unfinished is
+> presented as done.
 
 ## Requirements
 
@@ -63,9 +64,10 @@ One-line wrappers (same thing, plus dependency install):
 Then:
 
 ```bash
-npm run dev     # local dev server → http://localhost:8787/
+npm run dev     # local dev server → http://localhost:8787/ (builds the admin first)
 npm test        # Vitest suite (in-memory SQLite, never a live D1)
-npm run build   # typecheck (tsc --noEmit)
+npm run build   # admin SPA build (Vite) + typecheck of worker and admin
+npm run build:admin  # admin SPA build only (Vite → admin/dist/admin/)
 ```
 
 ## Two paths
@@ -74,7 +76,7 @@ npm run build   # typecheck (tsc --noEmit)
 |---|---|---|
 | Cloudflare account | Not needed | Required (free tier works) |
 | Database | Wrangler local D1 (SQLite file under `.wrangler/`) | Cloudflare D1 `wordless` |
-| Media | Stub (records only, no uploads yet) | R2 `wordless-media` (not wired yet — later milestone) |
+| Media | R2 `wordless-media` via miniflare emulation (uploads work; no image derivatives yet — Phase 7) | R2 `wordless-media` |
 | Command | `npm run dev` | `npm run deploy -- --confirm` |
 | Details | [INSTALLATION.md](INSTALLATION.md) | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
@@ -83,15 +85,15 @@ npm run build   # typecheck (tsc --noEmit)
 ```
 src/
   index.ts            Worker entry: fetch handler + route table
-  env.ts              Env bindings (DB / MEDIA / CONFIG) — no secrets
+  env.ts              Env bindings (DB / MEDIA / CONFIG / ASSETS) — no secrets
   db.ts               D1 wrapper (bound params only)
-  admin-shell.ts      Admin shell (Posts, Terms, Comments, Menus, Activity tabs)
   kernel/             hooks · router · errors · validation
   modules/
     posts/            posts/pages CRUD, slug generation, statuses, auto-revisions
     users/            users, PBKDF2 passwords, roles + capabilities
     options/          get/set/add/delete (JSON values)
-    media/            attachment records; R2 behind a STUB interface
+    settings/         site settings object + validation (M3)
+    media/            uploads to R2, attachment records + postmeta (M3)
     auth/             opaque sessions in D1 (revocable, expiring)
     revisions/        revision snapshots, autosave, restore, line diff
     terms/            categories (hierarchical) + tags (flat), counts
@@ -104,9 +106,21 @@ src/
     health/           site health checks (real, per-check pass/fail)
     activity/         wl_audit_log writes + admin list
   compat/
-    wordpress.ts      31-function WP registry, honestly tagged
+    wordpress.ts      34-function WP registry, honestly tagged
   test/
     test-db.ts        in-memory SQLite test helper (tests only)
+    fake-storage.ts   in-memory MediaStorage for tests (tests only)
+admin/
+  vite.config.ts      Vite build → admin/dist/admin/ (base /admin/)
+  index.html          SPA entry point
+  src/
+    main.tsx          React entry point
+    App.tsx           hash routing + sidebar layout + auth gate
+    styles.css        the one plain stylesheet (no framework)
+    lib/              API client, types, date/permalink helpers
+    editor/           Gutenberg block parser/serializer + tests
+    pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
+                      Menus, Users, Settings, Site Health, Activity, Login
 migrations/
   0001_init.sql       D1 schema v1: 12 wp_* tables + 6 wl_* tables
   0002_m2.sql         wl_redirects + M2 indexes
@@ -115,12 +129,12 @@ scripts/
   deploy.mjs          production deploy guard
 ```
 
-## API (Milestone 2)
+## API (Milestone 3)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
-`/tag/{slug}`, `/search?q=…` — the admin shell moved to `/admin` in M2
-(M1 breaking change).
+`/tag/{slug}`, `/search?q=…` — the React admin SPA lives at `/admin`
+(the server-rendered admin shell was replaced in M3).
 
 | Route | Auth | Description |
 |---|---|---|
@@ -167,11 +181,25 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `PUT /api/permalinks` | `manage_options` | Set structure |
 | `POST /api/auth/login` | — | `{ login, password }` → session cookie |
 | `POST /api/auth/logout` | — | Revoke the session |
+| `GET /api/auth/me` | logged in | Current user |
+| `GET /api/settings` | logged in | Site settings object |
+| `PUT /api/settings` | `manage_options` | Update + validate settings |
+| `GET /api/users` | `edit_users` | List users, paginated |
+| `POST /api/users` | `edit_users` | Create a user (role validated) |
+| `PUT /api/users/:id/role` | `edit_users` | Change a user's role |
+| `DELETE /api/users/:id` | `edit_users` | Delete; refused (400) when the user owns posts |
+| `POST /api/users/:id/reset-password` | `edit_users` | Temporary password, returned once |
+| `GET /api/media` | `upload_files` | List media (`?mime=&page=&per_page=`) |
+| `POST /api/media` | `upload_files` | Multipart upload (10 MB cap, MIME allowlist) |
+| `GET /api/media/:id` | `upload_files` | Get one media item |
+| `PUT /api/media/:id` | `upload_files` | Update alt text |
+| `DELETE /api/media/:id` | `upload_files` | Delete R2 object + post + meta |
+| `GET /media/:key` | — | Serve a stored file from R2 (long cache) |
 | `GET /api/options/:key` | logged in | Read one option |
 | `GET /feed` | — | RSS 2.0, latest 20 published posts |
 | `GET /sitemap.xml` | — | Posts + pages + terms with content |
 | `GET /robots.txt` | — | Allow all + sitemap line |
-| `GET /admin` | — | Admin shell (calls the real API, no fake data) |
+| `GET /admin` | — | React admin SPA (Static Assets; calls the real API, no fake data) |
 
 \* Draft/private posts require a logged-in user; trashed posts are never returned.
 
@@ -234,26 +262,77 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   Activity tabs plus a login form; the public site is at `/`.
 - 78 tests, all passing; `tsc --noEmit` clean under `strict`.
 
-## What Milestone 2 is not
+## What Milestone 3 is
+
+- **React admin SPA** at `/admin` (Vite + React + TypeScript, plain CSS in
+  one stylesheet, no Tailwind). Hash routing, dark sidebar / light content,
+  responsive. Pages: Dashboard, Posts, Pages, block editor, Media library,
+  Categories & Tags, Comments moderation, Menus, Users, Settings, Site
+  Health, Activity log, Login. Every page calls the real APIs — no fake
+  data anywhere; empty states say empty.
+- **Serving.** Vite builds to `admin/dist/admin/`; `wrangler.toml` declares
+  `assets = { directory = "./admin/dist" }` and the Worker serves the SPA
+  through the `ASSETS` binding (`/admin` and `/admin/*`, index.html
+  fallback for client routes). API and public-site routes keep priority.
+  `npm run build:admin` builds the SPA, `npm run build` builds it and
+  typechecks worker + admin, and `predev` builds it before `wrangler dev`
+  so `/admin` never 404s on a fresh clone. The installer builds it too
+  (step 5). The old server-rendered `src/admin-shell.ts` is removed.
+- **Block editor** (`admin/src/editor/`). Parses Gutenberg block HTML into
+  a block list (paragraph, heading h2/h3, list, quote, image by attachment
+  id, code, separator), edits text inline, adds/moves/deletes blocks, sets
+  heading levels, and serializes back to block-comment HTML. Round-trip is
+  lossless for supported blocks (tested). Unsupported blocks and uncommented
+  HTML are preserved as raw HTML blocks — editable as source, never dropped.
+  Save Draft / Publish go through the posts API (each save creates a
+  revision); autosave fires 20 s after the last edit; Preview opens the
+  public post URL once published. The media picker inserts image blocks.
+- **Media uploads.** `POST /api/media` (multipart, 10 MB cap, MIME
+  allowlist jpeg/png/gif/webp/avif/svg/pdf — anything else is a 400) stores
+  the file in R2 via the `MEDIA` binding, creates the attachment post and
+  postmeta (filename, size, alt); list/get/alt-update/delete endpoints and
+  `GET /media/:key` serving from R2 with a long cache. Tests use a fake
+  in-memory R2 bucket, never a live one. **Gap:** image derivatives / WebP
+  conversion are NOT in M3 — they need the Cloudflare Images binding or a
+  WASM pipeline (Phase 7).
+- **Settings.** `GET/PUT /api/settings` with validation (site title/tagline
+  non-empty, posts_per_page 1–100, permalink structure one of the four M2
+  values, default comment status, max-links 0–10, IANA timezone). The admin
+  Settings page edits these; `posts_per_page` now drives the public
+  listings and new posts inherit the default comment status. Changing the
+  permalink structure does not break existing URLs — M2's 301 redirects
+  already cover that.
+- **Users.** `GET /api/users` (admin only, paginated), create, role change,
+  delete, and `POST /api/users/:id/reset-password` (temporary password
+  returned ONCE, never logged or stored in plaintext). Delete is refused
+  with 400 when the user owns posts — reassignment is a later milestone.
+- **Compat registry:** 34 function names now — M3 adds `get_media_items`,
+  `wp_get_attachment_url` and `media_handle_upload` (partial; the upload
+  one needs a `MediaStorage` in the `WpContext` and throws a stub error
+  without one).
+- **No schema change was needed for M3** — media, settings and users all
+  use existing tables, so there is no `migrations/0003_m3.sql`.
+- 102 tests, all passing; `tsc --noEmit` clean for the worker and the
+  admin under `strict`.
+
+## What Milestone 3 is not
 
 - **Not a full theme engine.** The built-in default theme renders the
   site; custom themes are M5.
-- **Not a visual editor.** Content is written as HTML with optional
-  Gutenberg block comments; the block editor is a later milestone.
-- **No media uploads.** The R2 storage interface exists but throws a `STUB`
-  501 — there is deliberately no upload endpoint and no fake upload.
-- **No plugin/theme conversion.** The PHP→TypeScript conversion engine is
+- **Not a plugin/theme conversion.** The PHP→TypeScript conversion engine is
   Phase 4; the compat registry is the foundation for it, not the engine.
 - **No AI agents.** Provider abstraction, orchestration and the command
   centre are Phase 6.
+- **No image derivatives.** Uploads store the original file only; resizing
+  and WebP conversion are Phase 7.
+- **No user reassignment on delete.** Deleting a user who owns posts is
+  refused; reassignment is a later milestone.
 - **No commerce, email, payments, analytics or social integrations.**
   Those are Phase 8.
 - **No production deployment verified yet.** Local D1 + `wrangler dev` are
   verified; the production path is implemented but untested (no Cloudflare
   account connected — deployment happens when the user installs with their
   own account).
-- **No user-creation UI/CLI yet.** The first admin user is created via the
-  user service (seed tooling is a Phase 3 task).
 
 ## Documentation
 
@@ -276,6 +355,7 @@ claim to the WordPress trademark.
 
 ## Contributing
 
-Milestone 2 is a working core CMS, not a finished product. See the roadmap in
-`../docs/` (phases 1–10). Do not mark unfinished features as complete, do
-not commit secrets, and keep every stub labelled `STUB` until it is real.
+Milestone 3 is a working core CMS with a real admin and editor, not a
+finished product. See the roadmap in `../docs/` (phases 1–10). Do not mark
+unfinished features as complete, do not commit secrets, and keep every stub
+labelled `STUB` until it is real.

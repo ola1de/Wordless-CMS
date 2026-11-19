@@ -5,6 +5,7 @@
  */
 import type { Db } from "../../db";
 import { getOption } from "../options/service";
+import { getPostsPerPage } from "../settings/service";
 import { listApprovedThreaded } from "../comments/service";
 import type { Comment } from "../comments/types";
 import { postUrl } from "../permalinks/service";
@@ -105,7 +106,8 @@ ${form}
 export async function renderHome(db: Db, page = 1): Promise<RenderedPage> {
   const site = await siteInfo(db);
   const nav = await navItems(db);
-  const result = await listPosts(db, { status: "publish", type: "post", page, perPage: 10 });
+  const perPage = await getPostsPerPage(db);
+  const result = await listPosts(db, { status: "publish", type: "post", page, perPage });
   const body =
     result.posts.length === 0
       ? "<p>No posts published yet.</p>"
@@ -154,7 +156,8 @@ ${renderContent(post.content)}
 export async function renderTermArchive(db: Db, term: Term, page = 1): Promise<RenderedPage> {
   const site = await siteInfo(db);
   const nav = await navItems(db);
-  const result = await listPostsByTerm(db, term.termTaxonomyId, { page, perPage: 10 });
+  const perPage = await getPostsPerPage(db);
+  const result = await listPostsByTerm(db, term.termTaxonomyId, { page, perPage });
   const kind = term.taxonomy === "category" ? "Category" : term.taxonomy === "tag" ? "Tag" : term.taxonomy;
   const base = term.taxonomy === "category" ? `/category/${term.slug}` : `/tag/${term.slug}`;
   const body =
@@ -173,7 +176,8 @@ export async function renderDateArchive(db: Db, year: number, month: number | un
   const site = await siteInfo(db);
   const nav = await navItems(db);
   const prefix = month !== undefined ? `${year}-${String(month).padStart(2, "0")}` : `${year}`;
-  const posts = await listPostsByDatePrefix(db, prefix, 10, (page - 1) * 10);
+  const perPage = await getPostsPerPage(db);
+  const posts = await listPostsByDatePrefix(db, prefix, perPage, (page - 1) * perPage);
   const title = month !== undefined ? `Archive: ${year}-${String(month).padStart(2, "0")}` : `Archive: ${year}`;
   const body =
     `<h1>${escapeHtml(title)}</h1>` +
@@ -187,7 +191,8 @@ export async function renderDateArchive(db: Db, year: number, month: number | un
 export async function renderSearchPage(db: Db, query: string, page = 1): Promise<RenderedPage> {
   const site = await siteInfo(db);
   const nav = await navItems(db);
-  const result = await searchPosts(db, query, { page, perPage: 10 });
+  const perPage = await getPostsPerPage(db);
+  const result = await searchPosts(db, query, { page, perPage });
   const body =
     `<h1>Search results for &ldquo;${escapeHtml(query)}&rdquo;</h1>` +
     `<p>${result.total} result${result.total === 1 ? "" : "s"}.</p>` +

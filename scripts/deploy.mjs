@@ -52,12 +52,17 @@ async function main() {
   }
   ok(`Logged in to Cloudflare:\n${whoami.stdout.trim().split("\n").map((l) => `     ${l}`).join("\n")}`);
 
-  log("\n  2. Remote D1 migrations");
+  log("\n  2. Build (worker + admin SPA)");
+  r = run("npm", ["run", "build"], { stdio: "inherit" });
+  if (!r.ok) fail("`npm run build` failed (worker typecheck and/or admin build). Fix the errors and retry.");
+  ok("Build passed (worker + admin SPA)");
+
+  log("\n  3. Remote D1 migrations");
   let r = run("npx", ["wrangler", "d1", "migrations", "apply", "DB", "--remote"], { stdio: "inherit" });
   if (!r.ok) fail("Remote D1 migrations failed. See TROUBLESHOOTING.md.");
   ok("Remote D1 migrations applied");
 
-  log("\n  3. Deploy");
+  log("\n  4. Deploy");
   r = run("npx", ["wrangler", "deploy"]);
   if (!r.ok) fail("`wrangler deploy` failed. Check the output above and TROUBLESHOOTING.md.");
   const urlMatch = (r.stdout + r.stderr).match(/https:\/\/[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.workers\.dev/);
@@ -67,7 +72,7 @@ async function main() {
   }
   ok(`Deployed to ${url}`);
 
-  log("\n  4. Verify");
+  log("\n  5. Verify");
   try {
     const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(15000) });
     const body = await res.json();

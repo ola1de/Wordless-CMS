@@ -54,6 +54,8 @@ export async function insertPostRow(
     parentId: number;
     type: string;
     mimeType: string;
+    /** Defaults to 'open' at the DB layer; the service passes the site setting. */
+    commentStatus?: string;
   },
 ): Promise<number> {
   const { lastRowId } = await execRun(
@@ -61,8 +63,8 @@ export async function insertPostRow(
     `INSERT INTO wp_posts
        (post_author, post_date, post_date_gmt, post_content, post_title, post_excerpt,
         post_status, post_name, post_modified, post_modified_gmt, post_parent,
-        post_type, post_mime_type)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        post_type, post_mime_type, comment_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.authorId,
       row.date,
@@ -77,6 +79,7 @@ export async function insertPostRow(
       row.parentId,
       row.type,
       row.mimeType,
+      row.commentStatus ?? "open",
     ],
   );
   return lastRowId ?? 0;

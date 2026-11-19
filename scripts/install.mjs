@@ -33,7 +33,7 @@ const BANNER = `
    \\ V  V /   | |_| |  _ <  | |_| | |___| |___ ___) |___) |
     \\_/\\_/     \\___/ |_| \\_\\ |____/|_____|_____|____/|____/
 
-  The autonomous website operating system — Milestone 2
+  The autonomous website operating system — Milestone 3
 `;
 
 function log(msg = "") {
@@ -115,11 +115,21 @@ function validateWranglerToml() {
     ['binding = "DB"', "D1 binding DB"],
     ['binding = "MEDIA"', "R2 binding MEDIA"],
     ['binding = "CONFIG"', "KV binding CONFIG"],
+    ['binding = "ASSETS"', "Static Assets binding ASSETS (required — without it /admin deep links 503)"],
+    ['directory = "./admin/dist"', "Static Assets directory for the admin SPA"],
   ];
   for (const [marker, label] of required) {
     if (!text.includes(marker)) fail(`wrangler.toml is missing ${label} (${marker}).`);
   }
-  ok("wrangler.toml exists and declares DB / MEDIA / CONFIG bindings");
+  ok("wrangler.toml exists and declares DB / MEDIA / CONFIG bindings + admin Static Assets");
+  if (!existsSync(join(ROOT, "admin", "vite.config.ts"))) {
+    fail("admin/vite.config.ts is missing — the React admin build is not configured. Re-clone the repository.");
+  }
+  ok("Admin SPA build configured (admin/vite.config.ts)");
+  if (!existsSync(join(ROOT, "admin", "dist", "admin", "index.html"))) {
+    warn("Admin SPA is not built yet (admin/dist/admin/index.html missing).");
+    info("     It is built automatically by `npm run dev` (predev) and by this installer (step 5).");
+  }
   const hasPlaceholders = text.includes("REPLACE-ME");
   if (hasPlaceholders) {
     warn("wrangler.toml still has REPLACE-ME placeholder ids — fine for local development,");
@@ -150,6 +160,15 @@ function applyLocalMigrations() {
     fail("Local D1 migrations failed. See TROUBLESHOOTING.md (section: local D1 errors).");
   }
   ok("Local D1 schema applied (migrations/0001_init.sql)");
+}
+
+function buildAdmin() {
+  log("\n  Building the React admin SPA (Vite → admin/dist/admin/)…");
+  const r = run("npm", ["run", "build:admin"], { stdio: "inherit" });
+  if (!r.ok) {
+    fail("Admin build failed (`npm run build:admin`). Fix the errors and re-run the installer.");
+  }
+  ok("Admin SPA built (served at /admin)");
 }
 
 // ------------------------------------------------------------- production
@@ -287,10 +306,14 @@ async function main() {
   log("\n  4. Local database");
   applyLocalMigrations();
 
+  log("\n  5. Admin SPA");
+  buildAdmin();
+
   log("\n  ✓ Local setup complete.");
   log("  Start development with:");
   log("      npm run dev");
-  log("  Then open http://localhost:8787/ (admin shell) and");
+  log("  Then open http://localhost:8787/ (public site),");
+  log("  http://localhost:8787/admin (React admin) and");
   log("  http://localhost:8787/api/health (API health check).\n");
 
   if (LOCAL_ONLY) return;

@@ -1,5 +1,5 @@
 /**
- * WORDLESS — Worker entry point (Milestone 2).
+ * WORDLESS — Worker entry point (Milestone 3).
  * API gateway + public renderer. Routes are registered on the kernel
  * router; handlers call module services, never D1 directly.
  *
@@ -7,8 +7,11 @@
  * in fetch(): any GET that matches no API route is resolved through the
  * permalink resolver. Anonymous GETs are cached in the Cache API
  * (Cache-Control: public, max-age=60); logged-in traffic is never cached.
+ *
+ * The admin is a React SPA (admin/, Vite build to admin/dist/admin/)
+ * served from Static Assets at /admin. API + public-site routes keep
+ * priority; asset requests that miss fall back to /admin/index.html.
  */
-import { adminHtml } from "./admin-shell";
 import { adaptD1, nowIso } from "./db";
 import type { Db } from "./db";
 import type { Env } from "./env";
@@ -39,6 +42,15 @@ import {
   setMenuLocation,
   updateMenuItem,
 } from "./modules/menus/service";
+import {
+  deleteMedia,
+  findMediaByKey,
+  getMediaRecord,
+  listMedia,
+  updateMediaAlt,
+  uploadMedia,
+} from "./modules/media/service";
+import { R2MediaStorage } from "./modules/media/storage";
 import { getOption } from "./modules/options/service";
 import {
   getPermalinkStructure,
@@ -87,8 +99,17 @@ import {
 } from "./modules/terms/service";
 import { userCan } from "./modules/users/capabilities";
 import type { AuthUser } from "./env";
+import { getSettings, updateSettings } from "./modules/settings/service";
+import {
+  createUser,
+  deleteUser,
+  listUsers,
+  resetUserPassword,
+  setUserRole,
+} from "./modules/users/service";
+import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 function htmlResponse(html: string, status = 200): Response {
   return new Response(html, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -626,6 +647,103 @@ function buildRouter(): Router {
     { capability: "manage_options" },
   );
 
+  // --------------------------------------------------------------------- media
+  router.get(
+    "/api/media",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(
+        await listMedia(db, {
+          page,
+          perPage,
+          mimeType: url.searchParams.get("mime") ?? undefined,
+        }),
+      );
+    },
+    { capability: "upload_files" },
+  );
+
+  router.post(
+    "/api/media",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        throw new WordlessError("bad_request", 400, 'Upload requires a multipart "file" field.');
+      }
+      const title = typeof form.get("title") === "string" ? (form.get("title") as string) : undefined;
+      const alt = typeof form.get("alt") === "string" ? (form.get("alt") as string) : undefined;
+      const data = new Uint8Array(await file.arrayBuffer());
+      const record = await uploadMedia(db, new R2MediaStorage(env.MEDIA), {
+        filename: file.name,
+        mimeType: file.type,
+        data,
+        authorId: user?.id ?? 0,
+        title,
+        alt,
+      });
+      await log(db, user, "media.upload", "media", record.id);
+      return jsonOk(record, 201);
+    },
+    { capability: "upload_files" },
+  );
+
+  router.get(
+    "/api/media/:id",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const record = await getMediaRecord(db, parseIdParam(params.id, "media id"));
+      if (!record) throw new WordlessError("not_found", 404, "Media item not found.");
+      return jsonOk(record);
+    },
+    { capability: "upload_files" },
+  );
+
+  router.put(
+    "/api/media/:id",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const record = await updateMediaAlt(db, parseIdParam(params.id, "media id"), String(body.alt ?? ""));
+      await log(db, user, "media.alt_update", "media", record.id);
+      return jsonOk(record);
+    },
+    { capability: "upload_files" },
+  );
+
+  router.delete(
+    "/api/media/:id",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "media id");
+      const deleted = await deleteMedia(db, new R2MediaStorage(env.MEDIA), id);
+      await log(db, user, "media.delete", "media", id);
+      return jsonOk({ deleted });
+    },
+    { capability: "upload_files" },
+  );
+
+  // Serve a stored object: GET /media/<object-key> (flat keys, no slashes).
+  router.get("/media/:key", async ({ env, params }) => {
+    const db = adaptD1(env.DB);
+    const key = params.key ?? "";
+    const record = await findMediaByKey(db, key);
+    if (!record) throw new WordlessError("not_found", 404, "Media file not found.");
+    const stored = await new R2MediaStorage(env.MEDIA).get(key);
+    if (!stored) throw new WordlessError("not_found", 404, "Media file not found.");
+    return new Response(stored.data as unknown as BodyInit, {
+      status: 200,
+      headers: {
+        "Content-Type": record.mimeType,
+        // Object keys are UUID-prefixed and immutable: cache aggressively.
+        "Cache-Control": "public, max-age=31536000, immutable",
+      },
+    });
+  });
+
   // -------------------------------------------------------------------- auth
   router.post("/api/auth/login", async ({ request, env }) => {
     const db = adaptD1(env.DB);
@@ -653,15 +771,36 @@ function buildRouter(): Router {
     return response;
   });
 
-  router.post("/api/auth/logout", async ({ request, env, user }) => {
-    const db = adaptD1(env.DB);
-    const token = parseSessionCookie(request.headers.get("Cookie"));
-    if (token) await revokeSession(db, token);
-    if (user) await log(db, user, "auth.logout", "user", user.id);
-    const response = jsonOk({ loggedOut: true });
-    response.headers.set("Set-Cookie", clearSessionCookie());
-    return response;
-  });
+  router.post(
+    "/api/auth/logout",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const token = parseSessionCookie(request.headers.get("Cookie"));
+      if (token) await revokeSession(db, token);
+      if (user) await log(db, user, "auth.logout", "user", user.id);
+      const response = jsonOk({ loggedOut: true });
+      response.headers.set("Set-Cookie", clearSessionCookie());
+      return response;
+    },
+    { requireAuth: true },
+  );
+
+  router.get(
+    "/api/auth/me",
+    async ({ user }) => {
+      // requireAuth guarantees user is non-null; the guard above is the check.
+      return jsonOk({
+        user: {
+          id: user!.id,
+          login: user!.login,
+          email: user!.email,
+          displayName: user!.displayName,
+          role: user!.role,
+        },
+      });
+    },
+    { requireAuth: true },
+  );
 
   router.get(
     "/api/options/:key",
@@ -672,6 +811,96 @@ function buildRouter(): Router {
       return jsonOk({ key, value });
     },
     { requireAuth: true },
+  );
+
+  // ---------------------------------------------------------------- settings
+  router.get(
+    "/api/settings",
+    async ({ env }) => jsonOk(await getSettings(adaptD1(env.DB))),
+    { requireAuth: true },
+  );
+
+  router.put(
+    "/api/settings",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const settings = await updateSettings(db, body);
+      await log(db, user, "settings.update", "option", 0);
+      return jsonOk(settings);
+    },
+    { capability: "manage_options" },
+  );
+
+  // --------------------------------------------------------------------- users
+  router.get(
+    "/api/users",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listUsers(db, { page, perPage }));
+    },
+    { capability: "edit_users" },
+  );
+
+  router.post(
+    "/api/users",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const created = await createUser(db, {
+        login: body.login as string,
+        email: body.email as string,
+        password: body.password as string,
+        displayName: body.displayName as string | undefined,
+        role: isRole(body.role) ? body.role : undefined,
+      });
+      await log(db, user, "user.create", "user", created.id);
+      return jsonOk(created, 201);
+    },
+    { capability: "edit_users" },
+  );
+
+  router.put(
+    "/api/users/:id/role",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      if (!isRole(body.role)) {
+        throw new WordlessError("bad_request", 400, 'Field "role" must be a valid role.');
+      }
+      const updated = await setUserRole(db, parseIdParam(params.id, "user id"), body.role);
+      await log(db, user, "user.role_change", "user", updated.id);
+      return jsonOk(updated);
+    },
+    { capability: "edit_users" },
+  );
+
+  router.delete(
+    "/api/users/:id",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "user id");
+      const deleted = await deleteUser(db, id);
+      await log(db, user, "user.delete", "user", id);
+      return jsonOk({ deleted });
+    },
+    { capability: "edit_users" },
+  );
+
+  router.post(
+    "/api/users/:id/reset-password",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const id = parseIdParam(params.id, "user id");
+      // The temporary password is returned ONCE in this response. It is
+      // never logged and never stored in plaintext (only the hash is).
+      const { user: updated, temporaryPassword } = await resetUserPassword(db, id);
+      await log(db, user, "user.password_reset", "user", id);
+      return jsonOk({ user: updated, temporaryPassword });
+    },
+    { capability: "edit_users" },
   );
 
   // ------------------------------------------------------- feeds + sitemap
@@ -710,9 +939,8 @@ function buildRouter(): Router {
     return htmlResponse(rendered.html, rendered.status);
   });
 
-  router.get("/admin", () => {
-    return htmlResponse(adminHtml());
-  });
+  // The admin is a React SPA served from Static Assets (see fetch() below);
+  // there is no server-rendered admin shell anymore (M3 removed admin-shell.ts).
 
   return router;
 }
@@ -827,6 +1055,39 @@ async function handlePublicCommentPost(request: Request, db: Db, url: URL, user:
   }
 }
 
+/** Serve the React admin SPA from Static Assets (admin/dist/admin/). */
+async function serveAdmin(request: Request, env: Env): Promise<Response> {
+  if (!env.ASSETS) {
+    return htmlResponse(
+      "<!DOCTYPE html><html><head><title>Wordless admin</title></head><body><h1>Admin build not found</h1><p>The admin SPA has not been built yet. Run <code>npm run build:admin</code> and restart the dev server.</p></body></html>",
+      503,
+    );
+  }
+  const url = new URL(request.url);
+  try {
+    // Fetcher is typed against the Workers Request/Response, not the DOM
+    // lib's — the cast is safe: both are the same runtime objects.
+    const asset = (await env.ASSETS.fetch(
+      request as unknown as Parameters<Env["ASSETS"]["fetch"]>[0],
+    )) as unknown as Response;
+    if (asset.status !== 404) return asset;
+    // Missing asset file: client routes (hash routing means these are rare)
+    // fall back to the SPA entry point; missing files under /admin/assets/
+    // stay 404 so broken bundles are visible instead of masked.
+    if (url.pathname.startsWith("/admin/assets/")) return asset;
+    return (await env.ASSETS.fetch(
+      new Request(new URL("/admin/index.html", url), request) as unknown as Parameters<
+        Env["ASSETS"]["fetch"]
+      >[0],
+    )) as unknown as Response;
+  } catch {
+    return htmlResponse(
+      "<!DOCTYPE html><html><head><title>Wordless admin</title></head><body><h1>Admin unavailable</h1><p>The admin SPA could not be loaded. Run <code>npm run build:admin</code> and restart the dev server.</p></body></html>",
+      503,
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -835,11 +1096,17 @@ export default {
       const user = await userFromSession(db, token);
       const url = new URL(request.url);
 
+      // The admin SPA lives under /admin and is served from Static Assets
+      // before any routing — API and public-site routes never reach it.
+      if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+        return serveAdmin(request, env);
+      }
+
       // Anonymous public GETs are cacheable; never cache API/admin/logged-in traffic.
       const cacheable =
         request.method === "GET" &&
         !url.pathname.startsWith("/api/") &&
-        url.pathname !== "/admin" &&
+        !url.pathname.startsWith("/admin") &&
         token === null;
       if (cacheable) {
         try {
@@ -856,7 +1123,7 @@ export default {
       let response = await buildRouter().handle(request, env, user);
 
       // Public fallback: anything that is not an API/admin route is a site URL.
-      if (response.status === 404 && !url.pathname.startsWith("/api/") && url.pathname !== "/admin") {
+      if (response.status === 404 && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/admin")) {
         if (request.method === "GET") {
           response = await handlePublicGet(db, url);
         } else if (request.method === "POST" && url.pathname.endsWith("/comments")) {

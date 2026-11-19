@@ -3,9 +3,9 @@
  * row in wp_usermeta holding JSON, e.g. {"administrator": true}.
  * (WordPress stores a PHP-serialized array; Wordless stores JSON.)
  */
-import { execRun, nowIso, queryOne } from "../../db";
+import { execRun, nowIso, queryAll, queryOne } from "../../db";
 import type { Db } from "../../db";
-import { badRequest, conflict } from "../../kernel/errors";
+import { badRequest, conflict, notFound } from "../../kernel/errors";
 import { requireEmail, requireString } from "../../kernel/validate";
 import { isRole, type Role } from "./capabilities";
 import { hashPassword, verifyPassword } from "./password";
@@ -158,4 +158,97 @@ export async function deleteUserMeta(db: Db, userId: number, key: string): Promi
     key,
   ]);
   return changes > 0;
+}
+
+export interface UserListResult {
+  users: User[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+/** Paginated user list (admin only at the route layer). */
+export async function listUsers(
+  db: Db,
+  opts: { page?: number; perPage?: number } = {},
+): Promise<UserListResult> {
+  const page = opts.page !== undefined && opts.page >= 1 ? Math.floor(opts.page) : 1;
+  const perPage = opts.perPage !== undefined ? Math.min(Math.max(Math.floor(opts.perPage), 1), 100) : 20;
+  const totalRow = await queryOne<{ n: unknown }>(db, "SELECT COUNT(*) AS n FROM wp_users");
+  const total = typeof totalRow?.n === "number" ? totalRow.n : 0;
+  const found = await queryAll<UserRow>(
+    db,
+    "SELECT * FROM wp_users ORDER BY user_registered DESC, ID DESC LIMIT ? OFFSET ?",
+    [perPage, (page - 1) * perPage],
+  );
+  const users: User[] = [];
+  for (const row of found) users.push(rowToUser(row, await roleForUser(db, asInt(row.ID))));
+  return { users, total, page, perPage, totalPages: total === 0 ? 0 : Math.ceil(total / perPage) };
+}
+
+/** Change a user's role (rewrites the wp_capabilities meta row). */
+export async function setUserRole(db: Db, id: number, role: Role): Promise<User> {
+  const existing = await getUserById(db, id);
+  if (!existing) throw notFound(`User ${id} not found.`);
+  await updateUserMeta(db, id, ROLE_META_KEY, { [role]: true });
+  const updated = await getUserById(db, id);
+  if (!updated) throw new Error("Failed to read back the updated user.");
+  return updated;
+}
+
+/**
+ * Delete a user. Refused when the user owns posts — content must be
+ * reassigned or deleted first. Reassignment is a later milestone;
+ * the refusal message says so instead of silently deleting content.
+ */
+export async function deleteUser(db: Db, id: number): Promise<boolean> {
+  const existing = await getUserById(db, id);
+  if (!existing) throw notFound(`User ${id} not found.`);
+  const owned = await queryOne<{ n: unknown }>(
+    db,
+    "SELECT COUNT(*) AS n FROM wp_posts WHERE post_author = ? AND post_status != 'trash'",
+    [id],
+  );
+  const ownedCount = typeof owned?.n === "number" ? owned.n : 0;
+  if (ownedCount > 0) {
+    throw badRequest(
+      `User "${existing.login}" owns ${ownedCount} post(s). Reassign or delete their posts first — post reassignment is a later milestone and is not available yet.`,
+    );
+  }
+  // Revoke sessions directly (importing auth/service here would be circular).
+  await execRun(db, "UPDATE wl_sessions SET revoked = 1 WHERE user_id = ?", [id]);
+  await execRun(db, "DELETE FROM wp_usermeta WHERE user_id = ?", [id]);
+  const { changes } = await execRun(db, "DELETE FROM wp_users WHERE ID = ?", [id]);
+  return changes > 0;
+}
+
+const TEMP_PASSWORD_CHARS = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/** Generate a random temporary password (16 chars, no ambiguous glyphs). */
+export function generateTemporaryPassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let out = "";
+  for (const b of bytes) out += TEMP_PASSWORD_CHARS[b % TEMP_PASSWORD_CHARS.length];
+  return out;
+}
+
+/**
+ * Admin password reset. Sets a fresh temporary password, revokes all of
+ * the user's sessions, and returns the password ONCE. It is never logged
+ * and never stored in plaintext — only the PBKDF2 hash is stored.
+ */
+export async function resetUserPassword(
+  db: Db,
+  id: number,
+): Promise<{ user: User; temporaryPassword: string }> {
+  const existing = await getUserById(db, id);
+  if (!existing) throw notFound(`User ${id} not found.`);
+  const temporaryPassword = generateTemporaryPassword();
+  const hash = await hashPassword(temporaryPassword);
+  await execRun(db, "UPDATE wp_users SET user_pass = ? WHERE ID = ?", [hash, id]);
+  await execRun(db, "UPDATE wl_sessions SET revoked = 1 WHERE user_id = ?", [id]);
+  const user = await getUserById(db, id);
+  if (!user) throw new Error("Failed to read back the updated user.");
+  return { user, temporaryPassword };
 }

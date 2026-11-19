@@ -27,10 +27,12 @@ A plain `npm run deploy` (no `--confirm`) **refuses to deploy**.
    - `wrangler d1 create wordless` → id written into `wrangler.toml`
    - `wrangler r2 bucket create wordless-media`
    - `wrangler kv namespace create CONFIG` → id written into `wrangler.toml`
-3. **Remote migrations** — `wrangler d1 migrations apply DB --remote`
-   (applies `migrations/0001_init.sql` to the real D1 database).
-4. **Deploy** — `wrangler deploy` (bundles `src/index.ts`).
-5. **Verify** — fetches `<deployed-url>/api/health` and reports the URL.
+3. **Build** — `npm run build` (admin SPA + worker typecheck).
+4. **Remote migrations** — `wrangler d1 migrations apply DB --remote`
+   (applies `migrations/0001_init.sql` and `migrations/0002_m2.sql` to the
+   real D1 database).
+5. **Deploy** — `wrangler deploy` (bundles `src/index.ts` + Static Assets).
+6. **Verify** — fetches `<deployed-url>/api/health` and reports the URL.
    Deployment is only reported as successful if the health check returns ok.
 
 ## After deployment
@@ -39,10 +41,11 @@ A plain `npm run deploy` (no `--confirm`) **refuses to deploy**.
   URL (or your custom domain once configured — a later milestone).
 - Check logs: `npx wrangler tail`
 - Check D1: `npx wrangler d1 execute DB --remote --command "SELECT count(*) FROM wp_posts;"`
-- **Known gap (M1):** there is no admin-user seed command yet. Creating the
-  first administrator is a Phase 3 task; until then, production login is
-  not usable end-to-end. Do not hand-edit the production database to work
-  around this — wait for the seed tooling.
+- **Known gap (M1, still open in M3):** there is no admin-user seed
+  command yet. The Users page (M3) can create further users, but the
+  *first* administrator still needs seed tooling — a Phase 3 task; until
+  then, production login is not usable end-to-end. Do not hand-edit the
+  production database to work around this — wait for the seed tooling.
 
 ## Environments
 

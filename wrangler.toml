@@ -1,4 +1,4 @@
-# WORDLESS — Cloudflare Workers configuration (Milestone 1).
+# WORDLESS — Cloudflare Workers configuration (Milestone 3).
 # No secrets in this file. D1/KV ids are placeholders until the user
 # connects a Cloudflare account (see README.md). Run `wrangler login`
 # and `wrangler d1 create wordless` / `wrangler kv namespace create CONFIG`
@@ -11,6 +11,17 @@ main = "src/index.ts"
 # while the system clock was still 2026-11-18 UTC. Safe to bump forward
 # once that date has passed everywhere; behaviour is identical for M1.
 compatibility_date = "2026-11-18"
+
+# Admin SPA (React, Vite build to admin/dist/admin/). Static Assets are
+# served under /admin by the Worker via the ASSETS binding (src/index.ts);
+# the Worker keeps priority for /api/* and the public site. The `binding`
+# line is required: without it no ASSETS fetcher is injected into the
+# Worker and every non-file /admin/* path (SPA deep links, refreshes)
+# would return 503 "Admin build not found" even though /admin/ itself
+# still loads (the platform serves exact files directly).
+[assets]
+binding = "ASSETS"
+directory = "./admin/dist"
 
 [[d1_databases]]
 binding = "DB"

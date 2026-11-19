@@ -1,16 +1,17 @@
 /**
  * Object storage behind an interface.
  *
- * STUB (M1): R2 is NOT wired yet. The interface exists so services depend on
- * an abstraction, not on a bucket; the live R2 implementation
- * (R2MediaStorage, using the MEDIA binding from wrangler.toml) is a
- * Milestone 2 task and must be verified against a real bucket before any
- * upload route is exposed. There is deliberately NO upload endpoint in M1
- * and NO fake upload — a call here fails loudly instead of pretending.
+ * Milestone 3: R2 is wired. R2MediaStorage uses the MEDIA binding from
+ * wrangler.toml (R2 in production, miniflare's R2 emulation in local dev).
+ * StubMediaStorage remains for code paths that must fail loudly instead
+ * of pretending an upload worked. Tests use InMemoryMediaStorage
+ * (src/test/fake-storage.ts) — never a live bucket.
  *
- * TODO (M2): implement R2MediaStorage { put/get/delete } against R2Bucket,
- * add presigned-upload flow + image derivatives, then wire POST /api/media.
+ * Documented gap (M3): image derivatives / WebP conversion are NOT built.
+ * They need the Cloudflare Images binding or a WASM pipeline (Phase 7).
+ * Originals are stored as uploaded; no resizing happens here.
  */
+import type { R2Bucket } from "@cloudflare/workers-types";
 import { stubError } from "../../kernel/errors";
 
 export interface MediaStorage {
@@ -35,5 +36,36 @@ export class StubMediaStorage implements MediaStorage {
 
   async exists(): Promise<boolean> {
     throw stubError("R2 media object check (StubMediaStorage.exists)");
+  }
+}
+
+/** Live R2 implementation (M3). Keyed by the caller-supplied object key. */
+export class R2MediaStorage implements MediaStorage {
+  constructor(private readonly bucket: R2Bucket) {}
+
+  async put(key: string, data: Uint8Array, contentType: string): Promise<{ key: string; size: number }> {
+    await this.bucket.put(key, data, { httpMetadata: { contentType } });
+    return { key, size: data.byteLength };
+  }
+
+  async get(key: string): Promise<{ data: Uint8Array; contentType: string } | null> {
+    const obj = await this.bucket.get(key);
+    if (!obj) return null;
+    const buf = await obj.arrayBuffer();
+    return {
+      data: new Uint8Array(buf),
+      contentType: obj.httpMetadata?.contentType ?? "application/octet-stream",
+    };
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const existing = await this.bucket.head(key);
+    if (!existing) return false;
+    await this.bucket.delete(key);
+    return true;
+  }
+
+  async exists(key: string): Promise<boolean> {
+    return (await this.bucket.head(key)) !== null;
   }
 }

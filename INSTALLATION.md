@@ -57,7 +57,8 @@ npm run setup -- --local        # non-interactive local path (no prompts,
 npm run dev
 ```
 
-Open http://localhost:8787/ for the admin shell and
+Open http://localhost:8787/ for the public site,
+http://localhost:8787/admin for the React admin and
 http://localhost:8787/api/health for the API health check. `wrangler dev`
 serves the Worker with local D1/R2/KV emulation.
 

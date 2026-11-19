@@ -1,7 +1,7 @@
 /**
  * WordPress compatibility registry — the bridge converted extensions call.
  *
- * Each entry records an honest support level (Milestone 2):
+ * Each entry records an honest support level (Milestone 3):
  * - full:    implemented with WordPress semantics (sync hooks).
  * - partial: implemented for the common path; documented gaps remain.
  * - stub:    recorded/thrown, not functional yet — never silently faked.
@@ -40,6 +40,9 @@ import { listRevisions, restoreRevision } from "../modules/revisions/service";
 import type { Revision } from "../modules/revisions/types";
 import { getPostTerms, listTerms } from "../modules/terms/service";
 import type { Term } from "../modules/terms/types";
+import { getMediaRecord, listMedia, uploadMedia } from "../modules/media/service";
+import type { MediaListResult, MediaRecord, UploadMediaInput } from "../modules/media/service";
+import type { MediaStorage } from "../modules/media/storage";
 
 export type SupportLevel = "full" | "partial" | "stub" | "unsupported";
 
@@ -81,6 +84,9 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "wp_get_post_revisions", level: "partial", description: "Revision snapshots for a post, newest first (M2)." },
   { name: "wp_restore_post_revision", level: "partial", description: "Restores a revision; snapshots the pre-restore content first (M2)." },
   { name: "wp_nav_menu", level: "partial", description: "HTML for a menu by location or id (M2). No Walker/theme args yet." },
+  { name: "get_media_items", level: "partial", description: "Attachment posts, paginated with a MIME filter (M3). Returns MediaRecord objects, not WP_Post objects." },
+  { name: "wp_get_attachment_url", level: "partial", description: "Public /media/<key> URL for an attachment id (M3). Empty string when the id is not an attachment." },
+  { name: "media_handle_upload", level: "partial", description: "Validates and stores a file in R2, creating the attachment post + postmeta (M3). Needs a MediaStorage in the context; throws a stub error when none is wired. No image derivatives (Phase 7)." },
 ];
 
 /** In-memory registries for converted extensions (not persisted in M1). */
@@ -94,6 +100,12 @@ export const registeredRestRoutes: { namespace: string; route: string; methods: 
 export interface WpContext {
   db: Db;
   currentUser: User | null;
+  /**
+   * Media storage for media_handle_upload. The Worker passes an
+   * R2MediaStorage; tests pass an in-memory fake. Absent → upload throws
+   * a stub error instead of silently pretending to work.
+   */
+  storage?: MediaStorage;
 }
 
 export interface WordPressApi {
@@ -128,6 +140,9 @@ export interface WordPressApi {
   wp_get_post_revisions(postId: number): Promise<Revision[]>;
   wp_restore_post_revision(revisionId: number): Promise<Post>;
   wp_nav_menu(args?: { theme_location?: string; menu?: number }): Promise<string>;
+  get_media_items(args?: { page?: number; perPage?: number; mimeType?: string }): Promise<MediaListResult>;
+  wp_get_attachment_url(id: number): Promise<string>;
+  media_handle_upload(input: UploadMediaInput): Promise<MediaRecord>;
 }
 
 export function createWordPressApi(ctx: WpContext): WordPressApi {
@@ -220,6 +235,18 @@ export function createWordPressApi(ctx: WpContext): WordPressApi {
     },
     wp_get_post_revisions: (postId) => listRevisions(db, postId),
     wp_restore_post_revision: (revisionId) => restoreRevision(db, revisionId),
+    get_media_items: (args = {}) =>
+      listMedia(db, { page: args.page, perPage: args.perPage, mimeType: args.mimeType }),
+    wp_get_attachment_url: async (id) => {
+      const record = await getMediaRecord(db, id);
+      return record ? record.url : "";
+    },
+    media_handle_upload: async (input) => {
+      if (!ctx.storage) {
+        throw stubError("media_handle_upload — no MediaStorage in the WpContext (wire R2MediaStorage)");
+      }
+      return uploadMedia(db, ctx.storage, input);
+    },
     wp_nav_menu: async (args = {}) => {
       let items: MenuItem[] = [];
       if (args.theme_location !== undefined) {

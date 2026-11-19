@@ -20,6 +20,7 @@ import type { CreatePostInput, ListPostsOptions, Post, PostListResult, UpdatePos
 import { isPostStatus } from "./types";
 import { createRevision } from "../revisions/service";
 import { recordSlugChange } from "../permalinks/service";
+import { getDefaultCommentStatus } from "../settings/service";
 
 /** "Hello, World!" -> "hello-world"; "Café & Bar" -> "cafe-bar"; "" -> "post". */
 export function slugify(text: string): string {
@@ -60,6 +61,8 @@ export async function createPost(db: Db, input: CreatePostInput): Promise<Post> 
   const baseSlug = input.slug !== undefined ? slugify(input.slug) : slugify(title);
   const slug = await ensureUniqueSlug(db, baseSlug);
   const now = nowIso();
+  // New posts inherit the site's default comment status (settings, M3).
+  const commentStatus = await getDefaultCommentStatus(db);
   const id = await insertPostRow(db, {
     authorId: input.authorId,
     date: now,
@@ -71,6 +74,7 @@ export async function createPost(db: Db, input: CreatePostInput): Promise<Post> 
     parentId: input.parentId ?? 0,
     type,
     mimeType: input.mimeType ?? "",
+    commentStatus,
   });
   const created = await findPostById(db, id);
   if (!created) throw new Error("Failed to read back the created post.");
