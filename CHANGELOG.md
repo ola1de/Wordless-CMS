@@ -30,9 +30,13 @@ cover; the honest limits for each milestone live in `README.md` and
 - **Windows installer fix:** `scripts/install.mjs`, `deploy.mjs` and
   `seed-admin.mjs` spawned `npm`/`npx` with `shell: false`, which fails
   on Windows because npm/npx are `.cmd` shims — setup wrongly reported
-  "npm was not found" on a machine where npm works. The `run()` helper
-  in all three scripts now resolves to `npm.cmd`/`npx.cmd` on Windows.
-  Found from a real Windows install attempt (Node 24.16.0).
+  "npm was not found" on a machine where npm works. First fix (resolve
+  to `npm.cmd`) did NOT work: a diagnostic on the real Windows machine
+  showed `npm` → ENOENT, `npm.cmd` → EINVAL, `npm` with a shell → works.
+  The `run()` helper in all three scripts now runs through `cmd.exe`
+  (`shell: true`) on Windows only, with arguments quoted (MSVC rules)
+  because Node concatenates them unescaped with a shell (DEP0190).
+  Found and proven from a real Windows install attempt (Node 24.16.0).
 
 ## 1.0.0 — 2026-11-19 (Milestone 10: Production readiness)
 

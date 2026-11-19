@@ -60,11 +60,31 @@ function flag(name) {
   return i >= 0 && i + 1 < ARGS.length ? ARGS[i + 1] : null;
 }
 
+/** Quote one argument for a Windows shell command line (MSVC rules). */
+function quoteArg(arg) {
+  if (arg === "") return '""';
+  if (!/[\s"]/.test(arg)) return arg;
+  let out = '"';
+  let backslashes = 0;
+  for (const ch of arg) {
+    if (ch === "\\") { backslashes++; continue; }
+    if (ch === '"') { out += "\\".repeat(backslashes * 2 + 1) + '"'; backslashes = 0; continue; }
+    out += "\\".repeat(backslashes) + ch;
+    backslashes = 0;
+  }
+  out += "\\".repeat(backslashes * 2) + '"';
+  return out;
+}
+
 function run(cmd, args, { stdio = "pipe" } = {}) {
-  // On Windows, npm/npx are .cmd shims; spawnSync without a shell cannot
-  // resolve them (ENOENT). Use the .cmd file explicitly on Windows.
-  const resolved = process.platform === "win32" && (cmd === "npm" || cmd === "npx") ? `${cmd}.cmd` : cmd;
-  const result = spawnSync(resolved, args, { cwd: ROOT, stdio, encoding: "utf8", shell: false });
+  // On Windows, npm/npx are .cmd shims and Node cannot spawn them without
+  // a shell (ENOENT for `npm`, EINVAL for `npm.cmd` — confirmed on a real
+  // Windows install). Run through cmd.exe on Windows, quoting arguments
+  // first: with shell:true Node concatenates args unescaped (see DEP0190),
+  // so values with spaces (e.g. Windows paths) need quoting to survive.
+  const useShell = process.platform === "win32";
+  const finalArgs = useShell ? args.map(quoteArg) : args;
+  const result = spawnSync(cmd, finalArgs, { cwd: ROOT, stdio, encoding: "utf8", shell: useShell });
   return {
     ok: result.status === 0,
     code: result.status ?? 1,
