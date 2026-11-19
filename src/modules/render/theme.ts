@@ -29,6 +29,12 @@ export interface LayoutOptions {
   body: string;
   /** Extra <head> content (e.g. feed link). Already-escaped/HTML. */
   headExtra?: string;
+  /**
+   * Stylesheet URL to link instead of the inline default CSS (M5).
+   * Used when a theme is active: the page links /theme.css?v=<hash>.
+   * When absent, the built-in inline CSS is used (M2 behaviour).
+   */
+  stylesheetHref?: string;
 }
 
 export function layout(opts: LayoutOptions): string {
@@ -38,15 +44,9 @@ export function layout(opts: LayoutOptions): string {
           .map((item) => `<li><a href="${escapeHtml(item.url)}">${escapeHtml(item.title)}</a></li>`)
           .join("")}</ul></nav>`
       : "";
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(opts.title)} — ${escapeHtml(opts.siteName)}</title>
-<meta name="description" content="${escapeHtml(opts.description)}">
-${opts.headExtra ?? ""}
-<style>
+  const style = opts.stylesheetHref
+    ? `<link rel="stylesheet" href="${escapeHtml(opts.stylesheetHref)}">`
+    : `<style>
   :root { color-scheme: light; }
   body { font-family: system-ui, -apple-system, sans-serif; margin: 0; color: #1a1a1a; background: #fff; line-height: 1.6; }
   header.site { border-bottom: 1px solid #e5e5e5; padding: 16px 24px; }
@@ -76,7 +76,16 @@ ${opts.headExtra ?? ""}
   form.comment-form input, form.comment-form textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
   form.comment-form button { margin-top: 12px; padding: 10px 18px; background: #2563eb; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
   footer.site { border-top: 1px solid #e5e5e5; padding: 16px 24px; color: #666; font-size: 14px; text-align: center; }
-</style>
+</style>`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(opts.title)} — ${escapeHtml(opts.siteName)}</title>
+<meta name="description" content="${escapeHtml(opts.description)}">
+${opts.headExtra ?? ""}
+${style}
 </head>
 <body>
 <header class="site">

@@ -25,6 +25,8 @@ import type { User } from "../modules/users/types";
 import { deleteOption, addOption, getOption, setOption } from "../modules/options/service";
 import { listMenuItems, resolveMenuByLocation } from "../modules/menus/service";
 import type { MenuItem } from "../modules/menus/types";
+import { getActiveThemeSlug, getTheme } from "../modules/themes/service";
+import type { ThemeRecord } from "../modules/themes/types";
 import { termUrl } from "../modules/permalinks/service";
 import {
   createPost,
@@ -94,6 +96,10 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "esc_html", level: "partial", description: "Escapes & < > \" ' for HTML output (M4)." },
   { name: "esc_attr", level: "partial", description: "Escapes & < > \" ' for attribute output — same escaping as esc_html in M4 (M4)." },
   { name: "wptexturize", level: "partial", description: "Converts straight quotes to curly quotes, --/--- to dashes, ... to an ellipsis (M4). A small subset of WordPress's full texturize." },
+  { name: "get_theme_root", level: "partial", description: "Returns the R2 prefix \"themes/\" where theme files live (M5). WordPress returns a filesystem path; Workers has no filesystem, so this is the object-storage prefix instead." },
+  { name: "wp_get_theme", level: "partial", description: "Returns the active theme (or the named one): slug, name, version, author, status, kind (M5). No WP_Theme object extras (no template files list, no parent/child resolution)." },
+  { name: "get_stylesheet", level: "partial", description: "Returns the active theme's slug (M5). The stylesheet itself is served at /theme.css." },
+  { name: "get_template", level: "partial", description: "Same as get_stylesheet in v1 (M5): Wordless has no parent/child theme hierarchy yet, so template and stylesheet are always the same theme." },
 ];
 
 /** In-memory registries for converted extensions (not persisted in M1). */
@@ -165,6 +171,14 @@ export interface WordPressApi {
   esc_html(text: string): string;
   esc_attr(text: string): string;
   wptexturize(text: string): string;
+  /** R2 prefix where theme files live (no filesystem path on Workers). */
+  get_theme_root(): string;
+  /** Active theme (or the named one): slug, name, version, author, status, kind. */
+  wp_get_theme(slug?: string): Promise<ThemeRecord>;
+  /** Active theme slug (its stylesheet is served at /theme.css). */
+  get_stylesheet(): Promise<string>;
+  /** Same as get_stylesheet in v1 — no parent/child themes yet. */
+  get_template(): Promise<string>;
 }
 
 export function createWordPressApi(ctx: WpContext): WordPressApi {
@@ -280,6 +294,13 @@ export function createWordPressApi(ctx: WpContext): WordPressApi {
     esc_html: (text: string) => escapeHtml(text),
     esc_attr: (text: string) => escapeHtml(text),
     wptexturize: (text: string) => wptexturize(text),
+    // Themes (M5): the active theme lives in wl_themes; its files in R2
+    // under themes/<slug>/. No filesystem path exists on Workers, so
+    // get_theme_root returns the R2 prefix. No parent/child themes yet.
+    get_theme_root: () => "themes/",
+    wp_get_theme: async (slug?: string) => getTheme(db, slug ?? (await getActiveThemeSlug(db))),
+    get_stylesheet: () => getActiveThemeSlug(db),
+    get_template: () => getActiveThemeSlug(db),
     wp_nav_menu: async (args = {}) => {
       let items: MenuItem[] = [];
       if (args.theme_location !== undefined) {

@@ -1,0 +1,89 @@
+/*
+Theme Name: Wordless
+Theme URI: https://github.com/ola1de/Wordless-CMS
+Author: Wordless
+Author URI: https://github.com/ola1de/Wordless-CMS
+Description: The default Wordless block theme — clean, fast and readable. Original work by the Wordless project; not a copy of any WordPress theme.
+Requires at least: 1.0
+Tested up to: 0.5
+Requires PHP: 0
+Version: 0.5.0
+License: MIT
+License URI: https://opensource.org/licenses/MIT
+Text Domain: wordless
+Tags: blog, clean, custom-colors, custom-menu, threaded-comments, wide-blocks
+*/
+
+/*
+ * The theme.json-generated stylesheet (CSS custom properties, global
+ * styles, per-block styles) is served with this file at /theme.css.
+ * These rules are the theme's own hand-written layer on top of it.
+ */
+
+a {
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.12em;
+}
+
+.site-header {
+	border-bottom: 1px solid #e5e5e5;
+	padding: 1.25rem 1.5rem;
+}
+
+.site-header .wp-block-site-title {
+	margin: 0;
+	font-size: 1.375rem;
+}
+
+.site-header .wp-block-site-title a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.site-header .wp-block-site-tagline {
+	margin: 0.125rem 0 0;
+	color: var(--wp--preset--color--secondary);
+	font-size: 0.875rem;
+}
+
+.site-header .wp-block-navigation ul {
+	list-style: none;
+	margin: 0.75rem 0 0;
+	padding: 0;
+	display: flex;
+	gap: 1.125rem;
+	flex-wrap: wrap;
+}
+
+.site-footer {
+	border-top: 1px solid #e5e5e5;
+	padding: 1rem 1.5rem;
+	color: var(--wp--preset--color--secondary);
+	font-size: 0.875rem;
+	text-align: center;
+}
+
+.wp-block-post-title a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.wp-block-post-title a:hover {
+	text-decoration: underline;
+}
+
+.post-list {
+	list-style: none;
+	padding: 0;
+}
+
+.post-list li {
+	padding: 1rem 0;
+	border-bottom: 1px solid #eee;
+}
+
+.pagination {
+	margin-top: 1.5rem;
+	display: flex;
+	gap: 1rem;
+}

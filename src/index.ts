@@ -87,6 +87,7 @@ import {
   renderSearchPage,
   renderSingle,
   renderTermArchive,
+  type RenderOptions,
 } from "./modules/render/service";
 import {
   diffRevisions,
@@ -109,6 +110,22 @@ import {
 } from "./modules/terms/service";
 import { userCan } from "./modules/users/capabilities";
 import type { AuthUser } from "./env";
+import {
+  activateTheme,
+  createPreview,
+  deleteTheme,
+  deleteVariation,
+  getActiveThemeSlug,
+  getActiveStylesheet,
+  getPreview,
+  getTheme,
+  getThemeDetail,
+  getVariation,
+  importClassicTheme,
+  importTheme,
+  listThemes,
+  saveVariation,
+} from "./modules/themes/service";
 import { getSettings, updateSettings } from "./modules/settings/service";
 import {
   createUser,
@@ -119,7 +136,7 @@ import {
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -875,6 +892,150 @@ function buildRouter(): Router {
     { capability: "install_plugins" },
   );
 
+  // ------------------------------------------------------------------ themes (M5)
+  // Literal paths are registered before /api/themes/:slug so "active",
+  // "import" and "preview" are never read as a slug (first match wins).
+  router.get(
+    "/api/themes",
+    async ({ env }) => jsonOk(await listThemes(adaptD1(env.DB))),
+    { capability: "edit_theme_options" },
+  );
+
+  router.get("/api/themes/active", async ({ env }) => {
+    const db = adaptD1(env.DB);
+    const slug = await getActiveThemeSlug(db);
+    const theme = await getTheme(db, slug);
+    const variation = await getVariation(db, slug);
+    return jsonOk({ active: theme, variation });
+  });
+
+  router.post(
+    "/api/themes/import",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        throw new WordlessError("bad_request", 400, 'Import requires a multipart "file" field (.zip).');
+      }
+      const result = await importTheme(db, new R2MediaStorage(env.MEDIA), file.name, new Uint8Array(await file.arrayBuffer()));
+      await log(db, user, "theme.import", "theme", 0);
+      return jsonOk(result, 201);
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.post(
+    "/api/themes/import-classic",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        throw new WordlessError("bad_request", 400, 'Import requires a multipart "file" field (.zip).');
+      }
+      const result = await importClassicTheme(db, new R2MediaStorage(env.MEDIA), file.name, new Uint8Array(await file.arrayBuffer()));
+      await log(db, user, "theme.import_classic", "theme", 0);
+      return jsonOk(result, 201);
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.post(
+    "/api/themes/preview",
+    async ({ request, env }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const slug = requireString(body.slug, "slug", { max: 100 });
+      const settings = body.settings;
+      if (settings === undefined || typeof settings !== "object" || settings === null) {
+        throw new WordlessError("bad_request", 400, 'Preview requires a "settings" object.');
+      }
+      return jsonOk(await createPreview(db, slug, settings as Record<string, unknown>));
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.get(
+    "/api/themes/:slug",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await getThemeDetail(db, new R2MediaStorage(env.MEDIA), params.slug ?? ""));
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.post(
+    "/api/themes/:slug/activate",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const theme = await activateTheme(db, params.slug ?? "");
+      await log(db, user, "theme.activate", "theme", 0);
+      return jsonOk(theme);
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.post(
+    "/api/themes/:slug/delete",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const deleted = await deleteTheme(db, new R2MediaStorage(env.MEDIA), params.slug ?? "");
+      await log(db, user, "theme.delete", "theme", 0);
+      return jsonOk({ deleted });
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.get(
+    "/api/themes/:slug/variation",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk({ variation: await getVariation(db, params.slug ?? "") });
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.put(
+    "/api/themes/:slug/variation",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const variation = await saveVariation(db, params.slug ?? "", {
+        name: typeof body.name === "string" ? body.name : undefined,
+        settings: (body.settings ?? {}) as Record<string, unknown>,
+      });
+      await log(db, user, "theme.variation_save", "theme", 0);
+      return jsonOk(variation);
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  router.delete(
+    "/api/themes/:slug/variation",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const deleted = await deleteVariation(db, params.slug ?? "");
+      await log(db, user, "theme.variation_reset", "theme", 0);
+      return jsonOk({ deleted });
+    },
+    { capability: "edit_theme_options" },
+  );
+
+  // The active theme's stylesheet: generated theme.json CSS + style.css
+  // (block themes) or the imported style.css (classic themes). Versioned
+  // with the stylesheet hash (?v=…) so activation busts the cache; a
+  // preview token (?wl_preview=…) applies unsaved variation overrides.
+  router.get("/theme.css", async ({ env, url }) => {
+    const db = adaptD1(env.DB);
+    const { variation } = await resolveVariation(db, url);
+    const { css } = await getActiveStylesheet(db, new R2MediaStorage(env.MEDIA), variation);
+    return new Response(css, {
+      status: 200,
+      headers: { "Content-Type": "text/css; charset=utf-8" },
+    });
+  });
+
   // -------------------------------------------------------------------- auth
   router.post("/api/auth/login", async ({ request, env }) => {
     const db = adaptD1(env.DB);
@@ -1054,7 +1215,7 @@ function buildRouter(): Router {
   router.get("/", async ({ env, url }) => {
     const db = adaptD1(env.DB);
     const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
-    const rendered = await renderHome(db, page);
+    const rendered = await renderHome(db, page, await renderOpts(db, env, url));
     return htmlResponse(rendered.html, rendered.status);
   });
 
@@ -1062,11 +1223,11 @@ function buildRouter(): Router {
     const db = adaptD1(env.DB);
     const q = url.searchParams.get("q") ?? "";
     if (q.trim().length === 0) {
-      const rendered = await renderHome(db, 1);
+      const rendered = await renderHome(db, 1, await renderOpts(db, env, url));
       return htmlResponse(rendered.html, rendered.status);
     }
     const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
-    const rendered = await renderSearchPage(db, q, page);
+    const rendered = await renderSearchPage(db, q, page, await renderOpts(db, env, url));
     return htmlResponse(rendered.html, rendered.status);
   });
 
@@ -1076,17 +1237,47 @@ function buildRouter(): Router {
   return router;
 }
 
+/**
+ * Variation settings for a public request: a preview token's unsaved
+ * overrides win; otherwise the active theme's SAVED variation applies.
+ * The saved variation is what makes "save variation" actually change the
+ * live site — without this step the customizer would save but never render.
+ */
+async function resolveVariation(
+  db: Db,
+  url: URL,
+): Promise<{ variation?: Record<string, unknown>; previewToken?: string }> {
+  const token = url.searchParams.get("wl_preview");
+  if (token !== null && token !== "") {
+    const preview = await getPreview(db, token);
+    if (preview !== null) return { variation: preview.settings, previewToken: token };
+  }
+  const slug = await getActiveThemeSlug(db);
+  const saved = await getVariation(db, slug);
+  if (saved !== null) return { variation: saved.settings };
+  return {};
+}
+
+/** Build RenderOptions for a public request: R2 storage for theme files + variation overrides. */
+async function renderOpts(db: Db, env: Env, url: URL): Promise<RenderOptions> {
+  const opts: RenderOptions = { storage: new R2MediaStorage(env.MEDIA) };
+  const { variation, previewToken } = await resolveVariation(db, url);
+  if (variation !== undefined) opts.variation = variation;
+  if (previewToken !== undefined) opts.previewToken = previewToken;
+  return opts;
+}
+
 /** Public GET fallback: resolve the path through permalinks. */
-async function handlePublicGet(db: Db, url: URL): Promise<Response> {
+async function handlePublicGet(db: Db, url: URL, opts?: RenderOptions): Promise<Response> {
   const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
   const plainId = url.searchParams.get("p");
   if (plainId !== null) {
     const post = await resolvePostById(db, Number(plainId));
     if (post) {
-      const rendered = post.type === "page" ? await renderPage(db, post) : await renderSingle(db, post);
+      const rendered = post.type === "page" ? await renderPage(db, post, opts) : await renderSingle(db, post, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
-    const notFoundPage = await renderNotFound(db);
+    const notFoundPage = await renderNotFound(db, opts);
     return htmlResponse(notFoundPage.html, 404);
   }
   const resolved = await resolvePath(db, url.pathname);
@@ -1094,43 +1285,43 @@ async function handlePublicGet(db: Db, url: URL): Promise<Response> {
     case "redirect":
       return new Response(null, { status: 301, headers: { Location: resolved.target } });
     case "home": {
-      const rendered = await renderHome(db, page);
+      const rendered = await renderHome(db, page, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
     case "post": {
-      const rendered = await renderSingle(db, resolved.post);
+      const rendered = await renderSingle(db, resolved.post, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
     case "page": {
-      const rendered = await renderPage(db, resolved.post);
+      const rendered = await renderPage(db, resolved.post, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
     case "term": {
-      const rendered = await renderTermArchive(db, resolved.term, page);
+      const rendered = await renderTermArchive(db, resolved.term, page, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
     case "date-archive": {
-      const rendered = await renderDateArchive(db, resolved.year, resolved.month, page);
+      const rendered = await renderDateArchive(db, resolved.year, resolved.month, page, opts);
       return htmlResponse(rendered.html, rendered.status);
     }
     case "not-found": {
-      const rendered = await renderNotFound(db);
+      const rendered = await renderNotFound(db, opts);
       return htmlResponse(rendered.html, 404);
     }
   }
 }
 
 /** Public comment submission from the rendered form: /{slug}/comments. */
-async function handlePublicCommentPost(request: Request, db: Db, url: URL, user: AuthUser | null): Promise<Response> {
+async function handlePublicCommentPost(request: Request, db: Db, url: URL, user: AuthUser | null, opts?: RenderOptions): Promise<Response> {
   const segments = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
   const slug = segments.length === 2 ? segments[0] : undefined;
   if (slug === undefined || segments[1] !== "comments") {
-    const notFoundPage = await renderNotFound(db);
+    const notFoundPage = await renderNotFound(db, opts);
     return htmlResponse(notFoundPage.html, 404);
   }
   const post = await getPostBySlug(db, slug);
   if (!post) {
-    const notFoundPage = await renderNotFound(db);
+    const notFoundPage = await renderNotFound(db, opts);
     return htmlResponse(notFoundPage.html, 404);
   }
   try {
@@ -1234,10 +1425,12 @@ export default {
       }
 
       // Anonymous public GETs are cacheable; never cache API/admin/logged-in traffic.
+      // Preview renders (?wl_preview=) are never cached either.
       const cacheable =
         request.method === "GET" &&
         !url.pathname.startsWith("/api/") &&
         !url.pathname.startsWith("/admin") &&
+        !url.searchParams.has("wl_preview") &&
         token === null;
       if (cacheable) {
         try {
@@ -1256,9 +1449,9 @@ export default {
       // Public fallback: anything that is not an API/admin route is a site URL.
       if (response.status === 404 && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/admin")) {
         if (request.method === "GET") {
-          response = await handlePublicGet(db, url);
+          response = await handlePublicGet(db, url, await renderOpts(db, env, url));
         } else if (request.method === "POST" && url.pathname.endsWith("/comments")) {
-          response = await handlePublicCommentPost(request, db, url, user);
+          response = await handlePublicCommentPost(request, db, url, user, await renderOpts(db, env, url));
         }
       }
 

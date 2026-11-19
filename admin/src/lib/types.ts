@@ -202,3 +202,38 @@ export interface ExtensionRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Themes (Milestone 5). `report` is the parsed import/classic report when one exists. */
+export interface ThemeRecord {
+  slug: string;
+  name: string;
+  version: string;
+  author: string;
+  kind: "block" | "classic";
+  status: "active" | "inactive";
+  hasThemeJson: boolean;
+  stylesheetHash: string;
+  source: string;
+  report: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThemeDetail extends ThemeRecord {
+  themeJson: Record<string, unknown> | null;
+  stylesheet: string;
+  files: Record<string, string>;
+}
+
+export interface ThemeVariation {
+  name: string;
+  settings: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export interface PreviewToken {
+  token: string;
+  slug: string;
+  settings: Record<string, unknown>;
+  expiresAt: string;
+}

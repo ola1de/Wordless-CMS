@@ -34,6 +34,7 @@ const REQUIRED_TABLES = [
   "wl_sessions",
   "wl_audit_log",
   "wl_redirects",
+  "wl_themes",
 ];
 
 export async function siteHealth(db: Db, env: Env, version: string): Promise<SiteHealth> {

@@ -8,7 +8,11 @@ import type {
   ConversionJobList,
   ExtensionRecord,
   MediaItem,
+  PreviewToken,
   Settings,
+  ThemeDetail,
+  ThemeRecord,
+  ThemeVariation,
   User,
 } from "./types";
 
@@ -117,5 +121,51 @@ export const api = {
   },
   listExtensions(): Promise<ExtensionRecord[]> {
     return request<ExtensionRecord[]>("/api/extensions");
+  },
+
+  /** Themes (Milestone 5). */
+  listThemes(): Promise<ThemeRecord[]> {
+    return request<ThemeRecord[]>("/api/themes");
+  },
+  getTheme(slug: string): Promise<ThemeDetail> {
+    return request<ThemeDetail>(`/api/themes/${encodeURIComponent(slug)}`);
+  },
+  getActiveTheme(): Promise<ThemeRecord> {
+    return request<ThemeRecord>("/api/themes/active");
+  },
+  async importTheme(file: File, kind: "block" | "classic"): Promise<ThemeRecord> {
+    const form = new FormData();
+    form.append("file", file);
+    const path = kind === "classic" ? "/api/themes/import-classic" : "/api/themes/import";
+    const res = await fetch(path, { method: "POST", credentials: "same-origin", body: form });
+    const body = (await res.json()) as Envelope<{ theme: ThemeRecord }>;
+    if (!res.ok || !body.ok) {
+      throw new ApiError(res.status, body.error?.message ?? `Theme import failed (${res.status}).`);
+    }
+    return (body.data as { theme: ThemeRecord }).theme;
+  },
+  activateTheme(slug: string): Promise<ThemeRecord> {
+    return request<ThemeRecord>(`/api/themes/${encodeURIComponent(slug)}/activate`, { method: "POST" });
+  },
+  deleteTheme(slug: string): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/themes/${encodeURIComponent(slug)}/delete`, { method: "POST" });
+  },
+  getVariation(slug: string): Promise<ThemeVariation | null> {
+    return request<ThemeVariation | null>(`/api/themes/${encodeURIComponent(slug)}/variation`);
+  },
+  saveVariation(slug: string, name: string, settings: Record<string, unknown>): Promise<ThemeVariation> {
+    return request<ThemeVariation>(`/api/themes/${encodeURIComponent(slug)}/variation`, {
+      method: "PUT",
+      body: JSON.stringify({ name, settings }),
+    });
+  },
+  deleteVariation(slug: string): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/themes/${encodeURIComponent(slug)}/variation`, { method: "DELETE" });
+  },
+  createPreview(slug: string, settings: Record<string, unknown>): Promise<PreviewToken> {
+    return request<PreviewToken>("/api/themes/preview", {
+      method: "POST",
+      body: JSON.stringify({ slug, settings }),
+    });
   },
 };

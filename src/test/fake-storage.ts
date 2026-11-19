@@ -26,6 +26,10 @@ export class InMemoryMediaStorage implements MediaStorage {
     return this.objects.has(key);
   }
 
+  async list(prefix: string): Promise<string[]> {
+    return [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+  }
+
   /** Test helper: how many objects are stored. */
   get size(): number {
     return this.objects.size;

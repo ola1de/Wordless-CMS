@@ -10,15 +10,17 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 4 — Conversion engine spike (in development).** The kernel, D1
+> **Status: Milestone 5 — Themes + visual editor v1 (in development).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
-> block editor, and the PHP→TypeScript conversion engine (lexer, parser,
+> block editor, the PHP→TypeScript conversion engine (lexer, parser,
 > emitter, safety sandbox, async conversion jobs, Hello Dolly end-to-end,
-> Akismet static analysis) are built and tested. The AI agents, visual
-> theme editor, commerce and integrations are **not built yet** — see
-> [What M4 is not](#what-milestone-4-is-not) below. Nothing unfinished is
+> Akismet static analysis), and the theme system (theme.json engine,
+> block-theme rendering, ZIP import, classic-theme analysis, customizer
+> with preview + variations) are built and tested. The AI agents,
+> commerce and integrations are **not built yet** — see
+> [What M5 is not](#what-milestone-5-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -109,18 +111,26 @@ src/
     activity/         wl_audit_log writes + admin list
     conversion/       conversion jobs in wl_jobs + runConversionJob (M4)
     extensions/       wl_extensions rows + bundled-extension registry (M4)
+    themes/           theme.json engine, templates, ZIP import, classic
+                      analysis, variations, preview (M5); wl_themes rows
   conversion/         PHP → TypeScript engine: lexer, parser, AST, emitter,
                       safety sandbox, static analysis (M4)
   compat/
-    wordpress.ts      41-function WP registry, honestly tagged
+    wordpress.ts      45-function WP registry, honestly tagged
   test/
     test-db.ts        in-memory SQLite test helper (tests only)
     fake-storage.ts   in-memory MediaStorage for tests (tests only)
+themes/
+  wordless-default/   the built-in default block theme (original work, M5):
+                      style.css, theme.json v3, templates/, parts/
 examples/
   hello-dolly/        converter output for the bundled Hello Dolly plugin (M4)
 docs/conversion/
   hello-dolly-report.md   the Hello Dolly conversion report (M4)
   akismet-analysis.md     static analysis of the bundled Akismet plugin (M4)
+docs/themes/
+  theme-support.md        theme.json v1/v2/v3 matrix + import guide (M5)
+  classic-conversion.md   classic-theme conversion report (M5)
 admin/
   vite.config.ts      Vite build → admin/dist/admin/ (base /admin/)
   index.html          SPA entry point
@@ -132,16 +142,19 @@ admin/
     editor/           Gutenberg block parser/serializer + tests
     pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
                       Menus, Users, Settings, Site Health, Activity, Login,
-                      Conversion (M4)
+                      Conversion (M4), ThemeEditor (M5)
 migrations/
   0001_init.sql       D1 schema v1: 12 wp_* tables + 6 wl_* tables
   0002_m2.sql         wl_redirects + M2 indexes
+  0005_m5.sql         wl_themes (M5)
 scripts/
   install.mjs         installer wizard (Node built-ins only)
   deploy.mjs          production deploy guard
+  generate-default-theme.mjs   regenerates src/modules/themes/default-theme.ts
+                      from themes/wordless-default/ (M5; tested for drift)
 ```
 
-## API (Milestone 4)
+## API (Milestone 5)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -212,6 +225,18 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `GET /api/conversion/jobs` | `install_plugins` | List conversion jobs, paginated |
 | `GET /api/conversion/jobs/:id` | `install_plugins` | One job: status, progress, report or error |
 | `GET /api/extensions` | `install_plugins` | Installed extensions (`wl_extensions`) |
+| `GET /api/themes` | `edit_theme_options` | List themes (`wl_themes`) |
+| `GET /api/themes/active` | — | Active theme + saved variation (if any) |
+| `POST /api/themes/import` | `edit_theme_options` | Import a block theme ZIP (≤5 MB; `style.css` + `theme.json`) |
+| `POST /api/themes/import-classic` | `edit_theme_options` | Import a classic theme ZIP: stylesheet + per-file analysis report |
+| `GET /api/themes/:slug` | `edit_theme_options` | Theme detail: theme.json, stylesheet, files, report |
+| `POST /api/themes/:slug/activate` | `edit_theme_options` | Activate (busts the theme CSS cache via the hash) |
+| `POST /api/themes/:slug/delete` | `edit_theme_options` | Delete; refused for the active theme / built-in default |
+| `GET /api/themes/:slug/variation` | `edit_theme_options` | Saved customizer variation (or null) |
+| `PUT /api/themes/:slug/variation` | `edit_theme_options` | Save a customizer variation (block themes only) |
+| `DELETE /api/themes/:slug/variation` | `edit_theme_options` | Reset to theme defaults |
+| `POST /api/themes/preview` | `edit_theme_options` | Create a 30-minute preview token for unsaved settings |
+| `GET /theme.css` | — | Active theme stylesheet (`?v=<hash>`; `?wl_preview=<token>` applies preview overrides) |
 | `GET /feed` | — | RSS 2.0, latest 20 published posts |
 | `GET /sitemap.xml` | — | Posts + pages + terms with content |
 | `GET /robots.txt` | — | Allow all + sitemap line |
@@ -381,6 +406,82 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   and WebP conversion are Phase 7.
 - **No user reassignment on delete.** Deleting a user who owns posts is
   refused; reassignment is a later milestone.
+
+## What Milestone 5 is
+
+- **theme.json engine** (`src/modules/themes/themejson.ts`). Parses and
+  validates theme.json v1–3 (v3 fully; v2 with documented gaps —
+  `settings.typography.writingMode` and per-block `elements` are recorded
+  as unsupported, not applied; v1 partial — no `customTemplates` /
+  `templateParts` / `settings.custom`). Invalid theme.json fails import
+  with the offending paths listed. Generates a real stylesheet: CSS
+  custom properties (`--wp--preset--color--*`, `--wp--preset--font-size--*`,
+  …), fluid `clamp()` font sizes, global + per-block styles, preset-var
+  resolution (`var:preset|color|x` → `var(--wp--preset--color--x)`),
+  layout widths, and a deterministic cyrb53 stylesheet hash.
+- **Theme registry + storage** (`migrations/0005_m5.sql`, `wl_themes`).
+  `GET /api/themes`, `GET /api/themes/:slug`, `POST /api/themes/import`
+  (multipart ZIP ≤5 MB, extracted with `fflate`, validated: `style.css`
+  header + `theme.json`; path traversal rejected), `POST
+  /api/themes/import-classic`, `POST /api/themes/:slug/activate`, `POST
+  /api/themes/:slug/delete` (refuses the active theme and the built-in
+  default), `GET /api/themes/active`. Theme files live in R2 under
+  `themes/<slug>/` via the media storage interface; metadata in D1.
+- **Wordless default theme** (`themes/wordless-default/`). An original
+  block theme authored for this project — `style.css` with a proper
+  header, `theme.json` v3, templates (`index`, `home`, `single`, `page`,
+  `archive`, `search`, `404`), parts (`header`, `footer`). It is seeded
+  lazily on a fresh install and is the active theme until another is
+  activated. The in-code bundle (`src/modules/themes/default-theme.ts`,
+  regenerated by `scripts/generate-default-theme.mjs`) is tested to match
+  the repo files byte for byte.
+- **Block-theme rendering.** The M2 render module now uses the active
+  theme: template hierarchy (home → index, single → single/singular/index,
+  page → page/singular/index, archive, search, 404, index fallback),
+  template parts, and template blocks rendered through the existing block
+  renderer (query/post-template/post-title/post-content/post-excerpt/
+  post-date/post-terms/query-title/query-pagination/search/group/columns/
+  navigation/site-title/site-tagline). The theme stylesheet is served at
+  `/theme.css?v=<hash>` and linked on every public page; activation busts
+  the cache. The M2 built-in rendering remains as the fallback when no
+  theme is active.
+- **Classic-theme conversion (report + partial import).** The M4 PHP
+  analyser runs over a classic theme's files and produces a per-file
+  report (convertible / partial / blocked with reasons); the stylesheet is
+  imported and used, the PHP is analysed, never executed. A synthetic
+  fixture authored for the tests (`src/modules/themes/fixtures/
+  classic-sample/`) analyses 3/3 convertible. Full report:
+  `docs/themes/classic-conversion.md`.
+- **Visual editor v1** (admin `#/themes`, `ThemeEditor.tsx`). Themes list
+  (import, activate, delete) and a customizer for the active block theme:
+  colour palette, font sizes, font families, spacing scale, content/wide
+  widths. Preview uses a short-lived server-side token (30 min,
+  `?wl_preview=<token>`, never cached, no JS injection); saving stores a
+  variation in options (`wl_theme_variation_<slug>`, merged over the
+  theme's theme.json); reset removes it. Full site-template editing is out
+  of scope for v1 and the UI says so.
+- **Compat registry:** 45 functions — M5 adds `get_theme_root`,
+  `wp_get_theme`, `get_stylesheet`, `get_template` (all partial, honest
+  levels; see `docs/themes/theme-support.md`).
+- 209 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 5 is not
+
+- **Not full theme.json fidelity.** v1/v2 gaps are documented in
+  `docs/themes/theme-support.md`; `patterns` are recorded, never executed;
+  `post-featured-image` renders nothing (no featured images yet).
+- **Not a classic-theme converter.** Classic themes get their stylesheet
+  plus an analysis report — no PHP template is converted to a block
+  template in v1, and no classic theme is claimed compatible.
+- **Not a site editor.** Template editing, template-part editing and
+  pattern creation are later milestones; v1 customizes settings only.
+- **Not image handling.** Theme assets are stored as-is; image derivatives
+  and WebP are Phase 7.
+- **Not a marketplace.** Theme installation from uploads is local/admin
+  only; a public marketplace with an SDK is Phase 8.
+- **No parent/child themes.** `get_template()` returns the same theme as
+  `get_stylesheet()` in v1.
 
 ## What Milestone 3 is
 

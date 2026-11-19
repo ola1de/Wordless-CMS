@@ -1,6 +1,7 @@
 {
   "description": "WORDLESS — autonomous website operating system. PHP-independent, WordPress-compatible CMS on Cloudflare Workers (TypeScript). Milestone 1: foundations.",
   "dependencies": {
+    "fflate": "^0.8.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -1,4 +1,4 @@
-# WORDLESS — Architecture (Milestone 4 summary)
+# WORDLESS — Architecture (Milestone 5 summary)
 
 The full design lives in `../docs/02-architecture.md` (system diagram,
 technology choices with reasons, D1 schema v1, kernel, module boundaries,
@@ -49,6 +49,11 @@ src/modules/
                         (local dev) or a Queue/Workflow consumer (production)
   extensions/           (M4) wl_extensions rows + bundled-extension registry
                         (examples/hello-dolly); install/get/list/status
+  themes/               (M5) wl_themes rows; theme.json engine (v1–3),
+                        template hierarchy + block-template renderer,
+                        fflate ZIP import, classic-theme analysis (M4
+                        analyser), variations in options, 30-min preview
+                        tokens; default theme ships in-code (default-theme.ts)
   posts/                create/get/list/update/trash/restore/delete; slug generation;
                         updates auto-save a revision; slug changes record redirects;
                         new posts inherit the default comment status (M3)
@@ -176,6 +181,71 @@ active bundled extensions at Worker startup is a later milestone. The
 marketplace (installing/activating arbitrary extensions from uploads) is
 Phase 8.
 
+## Theme system (M5)
+
+```
+themes/wordless-default/          original block theme (repo source of truth)
+  style.css · theme.json v3 · templates/*.html · parts/*.html
+        │  scripts/generate-default-theme.mjs
+        ▼
+src/modules/themes/default-theme.ts   in-code bundle (drift-tested)
+        │
+src/modules/themes/
+  themejson.ts   parse/validate v1–3 · generateThemeCss · mergeThemeSettings
+  templates.ts   template hierarchy · block-template tree parser + renderer
+  zip.ts         fflate ZIP extraction (≤5 MB, traversal rejected)
+  classic.ts     style.css header parse · M4 analyser per PHP file · report
+  service.ts     wl_themes CRUD · import/activate/delete · variations · preview
+        │
+  D1 wl_themes (migrations/0005_m5.sql) ── metadata, theme.json, stylesheet, hash, report
+  R2 themes/<slug>/ (MEDIA binding) ─────── template + asset files
+        │
+  public render (src/modules/render/service.ts)
+    loadActiveTheme → template hierarchy → renderTemplateFile → layout()
+    /theme.css?v=<hash> (generated CSS + style.css, variation merged when saved)
+```
+
+- **Storage.** A theme is NOT an extension: it has its own `wl_themes`
+  table (slug, name, version, author, kind block|classic, status,
+  theme_json, stylesheet, stylesheet_hash, source, report_json). Files
+  live in R2 under `themes/<slug>/` through the same `MediaStorage`
+  interface the media module uses (R2 in production, in-memory fake in
+  tests). The built-in default theme's files ship in code
+  (`default-theme.ts`) and are used when R2 has no copy — a fresh DB
+  renders correctly before any import.
+- **Rendering pipeline.** `renderHome`/`renderSingle`/`renderPage`/
+  `renderTermArchive`/`renderDateArchive`/`renderNotFound` resolve their
+  page context, then `finishPage` tries the active theme first:
+  `resolveTemplateName` picks the template by hierarchy, `renderTemplateFile`
+  parses the template into a block tree (stack-based parser — the
+  tokenizer is a single regex that must match hyphenated block names
+  like `template-part` and `post-title`) and renders it through the M2
+  block renderer, with template parts resolved from `parts/`. If no theme
+  is active, the M2 built-in layout renders instead.
+- **Stylesheet.** `/theme.css` serves the generated theme.json CSS plus
+  the theme's `style.css` (classic themes: the imported `style.css`
+  alone). The URL is versioned with the stylesheet hash
+  (`?v=<hash>`) so activation busts the Cache API entry; the CSS is
+  cached like other public assets.
+- **Variations.** Saved in options as `wl_theme_variation_<slug>` (name +
+  settings). On render, the variation's settings are merged over the
+  theme's theme.json settings (preset arrays merge by slug) and the CSS is
+  regenerated. Variations apply to block themes only.
+- **Preview.** `POST /api/themes/preview` stores unsaved settings under a
+  32-hex-char token in the `wl_theme_preview` option (30-minute TTL).
+  `/?wl_preview=<token>` (and `/theme.css?wl_preview=<token>`) render
+  with those overrides server-side. Preview requests are never cached and
+  nothing is injected into the page with JavaScript.
+- **Classic themes.** Import parses the `style.css` header, stores the
+  stylesheet, and runs each `.php` file through the M4 analyser for a
+  per-file convertible/partial/blocked report. No PHP is executed; no
+  template is converted in v1.
+- **Limits.** `fflate` is a bundled dependency (unzipSync/zipSync) and
+  fits the Workers limits; ZIPs are capped at 5 MB and extracted in
+  memory in the request (local dev). A production-scale import of a very
+  large theme would belong in an async job — same pattern as M4
+  conversion jobs.
+
 ## Admin architecture (M3)
 
 ```
@@ -213,6 +283,11 @@ Worker src/index.ts ── /admin, /admin/* ──▶ env.ASSETS.fetch()
   server-rendered shell with the React SPA at the same `/admin` path.
 - M2: search is LIKE-based v1; FTS5 is a later optimisation, not claimed here.
 - M2: the built-in default theme renders the site; a full theme engine is M5.
+- M5: the theme engine is built (theme.json v1–3, block-theme rendering,
+  ZIP import, classic analysis, customizer + preview + variations). The
+  M2 built-in rendering remains as the fallback when no theme is active.
+- M5: `/?wl_preview=<token>` and `/theme.css?wl_preview=<token>` are
+  never cached; theme activation busts the CSS cache via `?v=<hash>`.
 - M2: public GETs without a session cookie are cached in the Cache API
   (`Cache-Control: public, max-age=60`); `/api/*` and `/admin` are never cached.
 - M4: the converter never executes PHP — it only translates source text.

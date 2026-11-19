@@ -19,6 +19,8 @@ export interface MediaStorage {
   get(key: string): Promise<{ data: Uint8Array; contentType: string } | null>;
   delete(key: string): Promise<boolean>;
   exists(key: string): Promise<boolean>;
+  /** Keys starting with `prefix` (used by themes: `themes/<slug>/`). */
+  list(prefix: string): Promise<string[]>;
 }
 
 export class StubMediaStorage implements MediaStorage {
@@ -36,6 +38,10 @@ export class StubMediaStorage implements MediaStorage {
 
   async exists(): Promise<boolean> {
     throw stubError("R2 media object check (StubMediaStorage.exists)");
+  }
+
+  async list(): Promise<string[]> {
+    throw stubError("R2 media object list (StubMediaStorage.list)");
   }
 }
 
@@ -67,5 +73,16 @@ export class R2MediaStorage implements MediaStorage {
 
   async exists(key: string): Promise<boolean> {
     return (await this.bucket.head(key)) !== null;
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.bucket.list({ prefix, cursor });
+      for (const obj of page.objects) keys.push(obj.key);
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor !== undefined);
+    return keys;
   }
 }

@@ -1,0 +1,12 @@
+/*
+Theme Name: Classic Sample
+Theme URI: https://example.test/classic-sample
+Author: Wordless Test
+Description: A small synthetic classic theme written for the Wordless M5 test suite. Original code, not a copy of any WordPress theme.
+Version: 1.0.0
+License: MIT
+Text Domain: classic-sample
+Tags: blog, classic
+*/
+body { background: #fff; color: #222; }
+.site-header { border-bottom: 1px solid #ddd; }

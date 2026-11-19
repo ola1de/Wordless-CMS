@@ -85,7 +85,8 @@ export function parseBlocks(content: string): { blocks: Block[]; hasBlocks: bool
   return { blocks, hasBlocks };
 }
 
-function renderBlock(block: Block): string {
+/** Render one parsed block (exported for the M5 template engine). */
+export function renderBlock(block: Block): string {
   const inner = stripDangerousHtml(block.inner.trim());
   switch (block.name) {
     case "freeform":

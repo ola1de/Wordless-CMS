@@ -14,6 +14,7 @@ import { SettingsPage } from "./pages/Settings";
 import { HealthPage } from "./pages/Health";
 import { ActivityPage } from "./pages/Activity";
 import { ConversionPage } from "./pages/Conversion";
+import { ThemeEditorPage } from "./pages/ThemeEditor";
 
 export interface AppSettings {
   timezone: string;
@@ -34,6 +35,7 @@ const NAV: Array<{ hash: string; label: string }> = [
   { hash: "#/health", label: "Site Health" },
   { hash: "#/activity", label: "Activity" },
   { hash: "#/conversion", label: "Conversion" },
+  { hash: "#/themes", label: "Themes" },
 ];
 
 function routeFromHash(): string {
@@ -190,6 +192,9 @@ export function App(): React.ReactElement {
       break;
     case "conversion":
       page = <ConversionPage />;
+      break;
+    case "themes":
+      page = <ThemeEditorPage />;
       break;
     case "dashboard":
     default:
