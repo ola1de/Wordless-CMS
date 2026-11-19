@@ -10,17 +10,20 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 5 — Themes + visual editor v1 (in development).** The kernel, D1
+> **Status: Milestone 6 — AI operating system (built, in verification).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
 > block editor, the PHP→TypeScript conversion engine (lexer, parser,
 > emitter, safety sandbox, async conversion jobs, Hello Dolly end-to-end,
-> Akismet static analysis), and the theme system (theme.json engine,
+> Akismet static analysis), the theme system (theme.json engine,
 > block-theme rendering, ZIP import, classic-theme analysis, customizer
-> with preview + variations) are built and tested. The AI agents,
-> commerce and integrations are **not built yet** — see
-> [What M5 is not](#what-milestone-5-is-not) below. Nothing unfinished is
+> with preview + variations), and now the AI operating system (provider
+> abstraction with **Workers AI as the default provider**, orchestrator
+> with three enforced operating modes, 15 specialist agents, human
+> approvals, website memory, and the AI command centre) are built and
+> tested. Commerce and integrations are **not built yet** — see
+> [What M6 is not](#what-milestone-6-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -154,7 +157,7 @@ scripts/
                       from themes/wordless-default/ (M5; tested for drift)
 ```
 
-## API (Milestone 5)
+## API (Milestone 6)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -241,6 +244,22 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `GET /sitemap.xml` | — | Posts + pages + terms with content |
 | `GET /robots.txt` | — | Allow all + sitemap line |
 | `GET /admin` | — | React admin SPA (Static Assets; calls the real API, no fake data) |
+| `GET /api/ai/providers` | `manage_options` | Providers + configured state; Workers AI is the default |
+| `POST /api/ai/providers/select` | `manage_options` | Select a provider (`{ provider }`) |
+| `POST /api/ai/providers/:id/test` | `manage_options` | Probe a provider; unconfigured providers report honestly |
+| `GET /api/ai/mode` | `manage_options` | Current operating mode |
+| `PUT /api/ai/mode` | `manage_options` | Set mode: `manual` / `supervised` / `autonomous` |
+| `GET /api/ai/agents` | `manage_options` | 15-agent roster with live availability |
+| `POST /api/ai/tasks` | `manage_options` | Create + run an agent task (runs synchronously in-request in local dev) |
+| `GET /api/ai/tasks` | `manage_options` | List AI tasks, paginated |
+| `GET /api/ai/tasks/:id` | `manage_options` | One task with its result or error |
+| `GET /api/ai/approvals?status=` | `manage_options` | List approvals, paginated |
+| `POST /api/ai/approvals/:id/approve` | `manage_options` | Approve: applies the proposal through the existing services |
+| `POST /api/ai/approvals/:id/reject` | `manage_options` | Reject with a reason |
+| `GET /api/ai/memory` | `manage_options` | Website facts + admin notes |
+| `POST /api/ai/memory/notes` | `manage_options` | Add a note (refuses secret-like text) |
+| `DELETE /api/ai/memory/notes/:id` | `manage_options` | Delete a note (facts cannot be deleted this way) |
+| `POST /api/ai/memory/rebuild` | `manage_options` | Re-ingest facts from the site |
 
 \* Draft/private posts require a logged-in user; trashed posts are never returned.
 
@@ -400,8 +419,9 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - **No Queues/Workflows yet.** The job module is structured for a
   Queue/Workflow consumer, but production conversion still runs inside
   the request in M4.
-- **No AI agents.** Provider abstraction, orchestration and the command
-  centre are Phase 6.
+- **No AI agents in M3.** Provider abstraction, orchestration and the
+  command centre are Milestone 6 (built — see
+  [What Milestone 6 is](#what-milestone-6-is)).
 - **No image derivatives.** Uploads store the original file only; resizing
   and WebP conversion are Phase 7.
 - **No user reassignment on delete.** Deleting a user who owns posts is
@@ -483,6 +503,94 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - **No parent/child themes.** `get_template()` returns the same theme as
   `get_stylesheet()` in v1.
 
+## What Milestone 6 is
+
+- **Provider abstraction** (`src/ai/providers/`). Three providers behind
+  one interface: **Workers AI** (`@cf/meta/llama-3-8b-instruct` via the
+  `AI` binding — the **default and only required provider**, no extra
+  key), an **OpenAI-compatible** provider (key from the
+  `OPENAI_API_KEY` secret only, optional fallback, 30 s timeout), and a
+  deterministic **mock** provider for tests and local development.
+  Providers report honestly: when the Workers AI binding is absent the
+  API says "not configured" and never pretends a call succeeded. No keys
+  or secrets exist anywhere in the code. The `[ai]` binding in
+  `wrangler.toml` is commented out (no Cloudflare account is connected);
+  uncomment it at deploy time. **Live Workers AI calls have not been
+  verified in this environment** — only the mock path is exercised by
+  tests and the local smoke test.
+- **Orchestrator** (`src/ai/orchestrator.ts` + `src/modules/ai/`). AI
+  tasks are `wl_jobs` rows (`kind = 'ai_task'`). `runAiTask(db, jobId)`
+  routes to the agent, calls the provider, stores the result + token
+  usage in the job result JSON, and creates approval records for proposed
+  changes. It runs synchronously in-request in local dev and is
+  structured for a Queue/Workflow consumer later. Every task is listed
+  with its status and result.
+- **Operating modes** — `manual` (drafts only, nothing applied),
+  `supervised` (default; every proposal becomes a pending approval),
+  `autonomous` (low-risk actions apply automatically; medium/high-risk
+  still need approval). The orchestrator **enforces** the mode: tested
+  that a supervised task applies nothing until approved, manual never
+  applies, and autonomous still gates publishing behind an approval.
+- **15 specialist agents** (`src/ai/agents/`, see
+  `docs/ai/agents.md`). Content-writer and research-assistant draft via
+  the provider and propose draft posts; email/social composers draft
+  only; SEO, security, performance, accessibility, analytics, backup,
+  migration, code-review and design agents measure real site data and
+  report only what they measured. **commerce-assistant is honestly
+  unavailable** — it needs the commerce system from Milestone 8, the
+  command centre shows it as unavailable, and the API rejects its tasks
+  with a 400. No agent fabricates data; drafting agents label output as
+  an AI draft.
+- **Approvals** (`wl_ai_approvals`, migration `0006_m6.sql`). Approving
+  applies the proposal **first** through the existing services (a draft
+  post is created via the posts service; an option update goes through
+  the options service with an allow-list) and only then marks the row
+  approved — a failed apply leaves the approval pending. Rejecting
+  records the reason; deciding twice is an error. Only
+  `create_post` (always a draft), `update_post`, `publish_post`,
+  `update_option` (allow-listed keys only), `create_term` and
+  `update_theme_variation` exist as proposal types — there is no delete
+  action in M6.
+- **Website memory** (`wl_ai_memory`, migration `0006_m6.sql`). Facts
+  re-ingested from the site (title, tagline, theme, post/page titles,
+  extensions) plus admin notes. Agents receive the memory as prompt
+  context (tested: a stored note appears in an agent's context). Notes
+  refuse secret-like text; memory never contains secrets.
+- **Command centre** (admin `#/ai`). Provider status with the honest
+  not-configured message, mode selector, agent list with availability +
+  risk, task composer, task list with results, approvals queue, and the
+  memory notes editor — all on the real API, empty states say empty.
+- **Compat registry:** a separate `AI_COMPAT` list (6 entries) for the
+  Wordless-native AI API surface — deliberately not in
+  `WORDPRESS_COMPAT`, because these are not WordPress functions.
+- **Migration `0006_m6.sql` was needed** (additive only): `wl_ai_approvals`
+  + `wl_ai_memory`. Existing local D1 databases need
+  `npx wrangler d1 migrations apply DB --local` before the AI routes work.
+- 236 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 6 is not
+
+- **Not a live AI deployment.** Workers AI calls are only verified
+  through the mock provider in tests and local dev; a real Workers AI
+  response has never been observed in this environment (no Cloudflare
+  account connected). The code handles the missing binding by reporting
+  "not configured".
+- **Not a queue.** AI tasks run synchronously inside the request in
+  local dev. On production this risks the 10 ms free-tier CPU limit for
+  long provider calls — Queues/Workflows are the planned production
+  path (the worker function is structured for it).
+- **Not commerce.** The commerce-assistant agent is unavailable until
+  Milestone 8; email/social agents draft only — sending and publishing
+  are M8.
+- **Not a full AI content studio.** The content-writer drafts a post;
+  the editorial calendar, SEO engine and Yoast/Rank Math import are
+  Milestone 7.
+- **Not a backup system.** The backup-advisor only advises on cadence
+  from measured data; real backup/restore is Milestone 9.
+- **Not a WordPress importer.** The migration-assistant only reports
+  content counts and conversion history; WXR import is Milestone 9.
+
 ## What Milestone 3 is
 
 - **React admin SPA** at `/admin` (Vite + React + TypeScript, plain CSS in
@@ -543,8 +651,9 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - **Not a plugin/theme conversion.** The PHP→TypeScript conversion engine
   is Milestone 4 — see [What Milestone 4 is](#what-milestone-4-is); the
   compat registry was the foundation for it, not the engine.
-- **No AI agents.** Provider abstraction, orchestration and the command
-  centre are Phase 6.
+- **No AI agents in M3.** Provider abstraction, orchestration and the
+  command centre are Milestone 6 (built — see
+  [What Milestone 6 is](#what-milestone-6-is)).
 - **No image derivatives.** Uploads store the original file only; resizing
   and WebP conversion are Phase 7.
 - **No user reassignment on delete.** Deleting a user who owns posts is

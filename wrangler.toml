@@ -36,3 +36,20 @@ bucket_name = "wordless-media"
 [[kv_namespaces]]
 binding = "CONFIG"
 id = "REPLACE-ME"
+
+# AI (Milestone 6) — Workers AI is the DEFAULT and only required provider.
+# It needs no API key, only this binding. It is COMMENTED OUT because no
+# Cloudflare account is connected yet: uncomment it when deploying to
+# Cloudflare (wrangler login first), and the code handles the binding
+# being absent by reporting "Workers AI is not configured" — it never
+# crashes. Local development and tests use the mock provider instead
+# (select it in the AI command centre, or leave the default: tasks that
+# need a provider fail honestly until the binding exists).
+# [ai]
+# binding = "AI"
+
+# OpenAI-compatible provider (OPTIONAL fallback only): no wrangler.toml
+# entry is needed. If you prefer it, set the secret on the deployed
+# Worker with `wrangler secret put OPENAI_API_KEY` (never in this file),
+# optionally OPENAI_BASE_URL / OPENAI_MODEL. Without the secret the
+# provider reports "not configured".

@@ -237,3 +237,114 @@ export interface PreviewToken {
   settings: Record<string, unknown>;
   expiresAt: string;
 }
+
+/** AI (Milestone 6). */
+export type AiMode = "manual" | "supervised" | "autonomous";
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  description: string;
+  configured: boolean;
+  configuredDetail: string;
+  recommended: boolean;
+  requiresKey: boolean;
+}
+
+export interface AiProvidersResponse {
+  providers: ProviderInfo[];
+  selected: string;
+}
+
+export interface AiModeResponse {
+  mode: AiMode;
+  description: string;
+}
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  description: string;
+  capabilities: string[];
+  risk: "low" | "medium" | "high";
+  requiresProvider: boolean;
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export interface AiProposal {
+  type: string;
+  summary: string;
+  risk: "low" | "medium" | "high";
+  payload: Record<string, unknown>;
+}
+
+export interface AiTaskResult {
+  agent: string;
+  mode: AiMode;
+  summary: string;
+  output?: string;
+  data?: Record<string, unknown>;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  proposals: AiProposal[];
+  approvals: Array<{ id: string; summary: string; risk: string }>;
+  applied: Array<{ summary: string; result: Record<string, unknown> }>;
+  applyErrors?: Array<{ summary: string; error: string }>;
+}
+
+export interface AiTask {
+  id: string;
+  agent: string;
+  input: string;
+  mode: AiMode;
+  status: "pending" | "running" | "done" | "failed";
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+  result?: AiTaskResult;
+  error?: string;
+}
+
+export interface AiTaskList {
+  tasks: AiTask[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface AiApproval {
+  id: string;
+  taskId: string;
+  agent: string;
+  action: AiProposal;
+  status: "pending" | "approved" | "rejected";
+  createdBy: number;
+  decidedBy: number | null;
+  decidedAt: string | null;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiApprovalList {
+  approvals: AiApproval[];
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+}
+
+export interface MemoryEntry {
+  id: number;
+  kind: "fact" | "note";
+  key: string;
+  value: string;
+  source: string;
+  updatedAt: string;
+}
+
+export interface MemoryList {
+  facts: MemoryEntry[];
+  notes: MemoryEntry[];
+}

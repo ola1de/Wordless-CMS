@@ -12,6 +12,18 @@
  * served from Static Assets at /admin. API + public-site routes keep
  * priority; asset requests that miss fall back to /admin/index.html.
  */
+import { listAgents } from "./ai/agents/registry";
+import { addNote, deleteNote, listMemory, rebuildMemory } from "./ai/memory";
+import { createAiTask, getAiTask, listAiTasks, runAiTask } from "./ai/orchestrator";
+import {
+  getProvider,
+  getSelectedProviderId,
+  listProviderInfo,
+  resolveProvider,
+  setSelectedProviderId,
+} from "./ai/providers/index";
+import { isProviderId } from "./ai/providers/types";
+import { AI_MODE_DESCRIPTIONS } from "./ai/types";
 import { createWordPressApi } from "./compat/wordpress";
 import { adaptD1, nowIso } from "./db";
 import type { Db } from "./db";
@@ -19,6 +31,7 @@ import type { Env } from "./env";
 import { WordlessError } from "./kernel/errors";
 import { jsonError, jsonOk, readJsonBody, Router } from "./kernel/router";
 import { intInRange, requireString } from "./kernel/validate";
+import { decideApproval, getAiMode, listApprovals, setAiMode } from "./modules/ai/service";
 import { logActivity, listActivity } from "./modules/activity/service";
 import {
   createConversionJob,
@@ -136,7 +149,7 @@ import {
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -890,6 +903,193 @@ function buildRouter(): Router {
       return jsonOk(await listExtensions(db));
     },
     { capability: "install_plugins" },
+  );
+
+  // ------------------------------------------------------- ai (M6) providers
+  // Workers AI is the DEFAULT and only required provider (user decision,
+  // 2026-11-19). The list always says plainly which providers are
+  // configured; nothing here pretends AI works when it does not.
+  router.get(
+    "/api/ai/providers",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk({ providers: listProviderInfo(env), selected: await getSelectedProviderId(db) });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/providers/select",
+    async ({ request, env }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const selected = await setSelectedProviderId(db, body.provider);
+      return jsonOk({ providers: listProviderInfo(env), selected });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/providers/:id/test",
+    async ({ env, params }) => {
+      const id = params.id ?? "";
+      if (!isProviderId(id)) throw new WordlessError("bad_request", 400, `Unknown AI provider "${id}".`);
+      const provider = getProvider(id);
+      // A probe never errors on "not configured" — it reports it.
+      return jsonOk(await provider.test(env));
+    },
+    { capability: "manage_options" },
+  );
+
+  // ------------------------------------------------------------ ai (M6) mode
+  router.get(
+    "/api/ai/mode",
+    async ({ env }) => {
+      const mode = await getAiMode(adaptD1(env.DB));
+      return jsonOk({ mode, description: AI_MODE_DESCRIPTIONS[mode] });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.put(
+    "/api/ai/mode",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const mode = await setAiMode(db, body.mode);
+      await log(db, user, "ai.mode", "option", 0);
+      return jsonOk({ mode, description: AI_MODE_DESCRIPTIONS[mode] });
+    },
+    { capability: "manage_options" },
+  );
+
+  // ---------------------------------------------------------- ai (M6) agents
+  router.get(
+    "/api/ai/agents",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      const { configured } = await resolveProvider(db, env);
+      return jsonOk(listAgents(configured));
+    },
+    { capability: "manage_options" },
+  );
+
+  // ----------------------------------------------------------- ai (M6) tasks
+  // Tasks run synchronously inside the request in local dev (same pattern
+  // as conversion jobs); in production a Queue/Workflow consumer calls
+  // the same runAiTask(db, jobId, ctx).
+  router.post(
+    "/api/ai/tasks",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const created = await createAiTask(db, {
+        agent: String(body.agent ?? ""),
+        input: String(body.input ?? ""),
+        mode: body.mode as never,
+      });
+      const finished = await runAiTask(db, created.id, { env, userId: user?.id ?? 0 });
+      await log(db, user, "ai.task", "job", 0);
+      return jsonOk(finished, 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/ai/tasks",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listAiTasks(db, { page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/ai/tasks/:id",
+    async ({ env, params }) => {
+      return jsonOk(await getAiTask(adaptD1(env.DB), params.id ?? ""));
+    },
+    { capability: "manage_options" },
+  );
+
+  // ------------------------------------------------------- ai (M6) approvals
+  router.get(
+    "/api/ai/approvals",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      const statusParam = url.searchParams.get("status");
+      const status =
+        statusParam === "pending" || statusParam === "approved" || statusParam === "rejected" ? statusParam : undefined;
+      const page = intInRange(url.searchParams.get("page"), "page", 1, 10000, 1);
+      const perPage = intInRange(url.searchParams.get("per_page"), "per_page", 1, 100, 20);
+      return jsonOk(await listApprovals(db, { status, page, perPage }));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/approvals/:id/approve",
+    async ({ env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const decided = await decideApproval(db, params.id ?? "", { approve: true, userId: user?.id ?? 0 });
+      await log(db, user, "ai.approve", "approval", 0);
+      return jsonOk(decided);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/approvals/:id/reject",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request).catch(() => ({} as Record<string, unknown>));
+      const decided = await decideApproval(db, params.id ?? "", {
+        approve: false,
+        userId: user?.id ?? 0,
+        reason: typeof body.reason === "string" ? body.reason : undefined,
+      });
+      await log(db, user, "ai.reject", "approval", 0);
+      return jsonOk(decided);
+    },
+    { capability: "manage_options" },
+  );
+
+  // ---------------------------------------------------------- ai (M6) memory
+  router.get(
+    "/api/ai/memory",
+    async ({ env }) => jsonOk(await listMemory(adaptD1(env.DB))),
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/memory/notes",
+    async ({ request, env }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      return jsonOk(await addNote(db, String(body.text ?? "")), 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.delete(
+    "/api/ai/memory/notes/:id",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const deleted = await deleteNote(db, parseIdParam(params.id, "note id"));
+      return jsonOk({ deleted });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/ai/memory/rebuild",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await rebuildMemory(db));
+    },
+    { capability: "manage_options" },
   );
 
   // ------------------------------------------------------------------ themes (M5)

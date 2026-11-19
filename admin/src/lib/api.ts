@@ -4,11 +4,22 @@
  * (`wordless_session`) is sent. Throws ApiError on non-OK responses.
  */
 import type {
+  AgentInfo,
+  AiApproval,
+  AiApprovalList,
+  AiMode,
+  AiModeResponse,
+  AiProvidersResponse,
+  AiTask,
+  AiTaskList,
   ConversionJob,
   ConversionJobList,
   ExtensionRecord,
   MediaItem,
+  MemoryEntry,
+  MemoryList,
   PreviewToken,
+  ProviderInfo,
   Settings,
   ThemeDetail,
   ThemeRecord,
@@ -167,5 +178,61 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ slug, settings }),
     });
+  },
+
+  /** AI command centre (Milestone 6). */
+  getAiProviders(): Promise<AiProvidersResponse> {
+    return request<AiProvidersResponse>("/api/ai/providers");
+  },
+  selectAiProvider(provider: string): Promise<AiProvidersResponse> {
+    return request<AiProvidersResponse>("/api/ai/providers/select", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    });
+  },
+  testAiProvider(id: string): Promise<{ ok: boolean; message: string }> {
+    return request<{ ok: boolean; message: string }>(`/api/ai/providers/${encodeURIComponent(id)}/test`, {
+      method: "POST",
+    });
+  },
+  getAiMode(): Promise<AiModeResponse> {
+    return request<AiModeResponse>("/api/ai/mode");
+  },
+  setAiMode(mode: AiMode): Promise<AiModeResponse> {
+    return request<AiModeResponse>("/api/ai/mode", { method: "PUT", body: JSON.stringify({ mode }) });
+  },
+  listAiAgents(): Promise<AgentInfo[]> {
+    return request<AgentInfo[]>("/api/ai/agents");
+  },
+  createAiTask(input: { agent: string; input: string; mode?: AiMode }): Promise<AiTask> {
+    return request<AiTask>("/api/ai/tasks", { method: "POST", body: JSON.stringify(input) });
+  },
+  listAiTasks(): Promise<AiTaskList> {
+    return request<AiTaskList>("/api/ai/tasks");
+  },
+  listAiApprovals(status?: string): Promise<AiApprovalList> {
+    const q = status !== undefined ? `?status=${encodeURIComponent(status)}` : "";
+    return request<AiApprovalList>(`/api/ai/approvals${q}`);
+  },
+  approveAiApproval(id: string): Promise<AiApproval> {
+    return request<AiApproval>(`/api/ai/approvals/${encodeURIComponent(id)}/approve`, { method: "POST" });
+  },
+  rejectAiApproval(id: string, reason?: string): Promise<AiApproval> {
+    return request<AiApproval>(`/api/ai/approvals/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? "" }),
+    });
+  },
+  getAiMemory(): Promise<MemoryList> {
+    return request<MemoryList>("/api/ai/memory");
+  },
+  addAiMemoryNote(text: string): Promise<MemoryEntry> {
+    return request<MemoryEntry>("/api/ai/memory/notes", { method: "POST", body: JSON.stringify({ text }) });
+  },
+  deleteAiMemoryNote(id: number): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>(`/api/ai/memory/notes/${id}`, { method: "DELETE" });
+  },
+  rebuildAiMemory(): Promise<{ facts: number; notes: number }> {
+    return request<{ facts: number; notes: number }>("/api/ai/memory/rebuild", { method: "POST" });
   },
 };

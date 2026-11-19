@@ -364,4 +364,21 @@ export function compatEntry(name: string): CompatEntry | undefined {
   return WORDPRESS_COMPAT.find((e) => e.name === name);
 }
 
+/**
+ * Wordless AI API surface (Milestone 6) — NOT WordPress functions, so
+ * they live in a separate list, not WORDPRESS_COMPAT. Each entry maps to
+ * a real HTTP endpoint under /api/ai/*; "partial" means the endpoint
+ * exists and works, with the documented M6 limits (no Queues yet — tasks
+ * run synchronously in the request in local dev; live Workers AI calls
+ * need the [ai] binding on a deployed Worker).
+ */
+export const AI_COMPAT: CompatEntry[] = [
+  { name: "wl_ai_complete", level: "partial", description: "POST /api/ai/tasks — run an agent with the selected provider (Workers AI by default, mock in local dev). Fails honestly with ai_not_configured when no provider is configured." },
+  { name: "wl_ai_providers", level: "partial", description: "GET /api/ai/providers (+ /select, /:id/test) — list providers with live configured state; Workers AI is the default, OpenAI-compatible is an optional fallback." },
+  { name: "wl_ai_mode", level: "partial", description: "GET/PUT /api/ai/mode — manual / supervised / autonomous. The orchestrator enforces the mode; supervised never applies without approval." },
+  { name: "wl_ai_agents", level: "partial", description: "GET /api/ai/agents — the 15-agent roster with live availability (commerce-assistant is unavailable until Milestone 8)." },
+  { name: "wl_ai_approve", level: "partial", description: "POST /api/ai/approvals/:id/approve|reject — human gate. Approving applies the proposal through the existing services; a failed apply leaves the approval pending." },
+  { name: "wl_ai_memory", level: "partial", description: "GET/POST /api/ai/memory — website facts + admin notes used as agent context. Rebuild re-ingests from the site; notes never contain secrets." },
+];
+
 export type { Role };

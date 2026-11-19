@@ -1,4 +1,4 @@
-# WORDLESS — Architecture (Milestone 5 summary)
+# WORDLESS — Architecture (Milestone 6 summary)
 
 The full design lives in `../docs/02-architecture.md` (system diagram,
 technology choices with reasons, D1 schema v1, kernel, module boundaries,
@@ -271,6 +271,94 @@ Worker src/index.ts ── /admin, /admin/* ──▶ env.ASSETS.fetch()
 - The admin never invents data: every page calls the real APIs, and empty
   states say empty.
 
+## AI system (M6)
+
+```
+Admin #/ai (CommandCentre.tsx)
+   │  providers / mode / agents / tasks / approvals / memory
+   ▼
+src/index.ts  /api/ai/*  (all manage_options)
+   ├── providers ──▶ src/ai/providers/ (registry: workers-ai / openai / mock)
+   ├── tasks ──────▶ src/ai/orchestrator.ts  createAiTask → runAiTask(db, jobId)
+   │                    │  wl_jobs kind='ai_task' (result JSON: output,
+   │                    │  proposals, approvals, applied, usage)
+   │                    ├─▶ src/ai/agents/*  (15 agents; run(ctx) → AgentResult)
+   │                    ├─▶ src/ai/memory.ts  (buildMemoryContext → prompt)
+   │                    └─▶ src/modules/ai/  mode + approvals + applier
+   └── memory ────▶ wl_ai_memory (facts re-ingested; admin notes)
+```
+
+- **Provider abstraction.** `src/ai/providers/types.ts` defines the
+  `Provider` interface (`id`, `name`, `isConfigured(env)`,
+  `configuredDetail(env)`, `complete(env, prompt, opts)`,
+  optional `embed`, `test(env)`). **Workers AI is the default and only
+  required provider** (model `@cf/meta/llama-3-8b-instruct`, via the `AI`
+  binding; the `[ai]` block in `wrangler.toml` is commented out until
+  deploy time, and the code reports "not configured" — never a crash —
+  when the binding is absent). The OpenAI-compatible provider is an
+  optional fallback (key only from the `OPENAI_API_KEY` secret, 30 s
+  timeout, error mapping to `ai_upstream_error`). The mock provider is
+  deterministic (FNV-1a hash of the prompt) for tests and local dev.
+  Selection lives in the `wl_ai_provider` option (default
+  `workers-ai`); `GET /api/ai/providers` reports live configured state.
+  Live Workers AI calls are **not verified** in this environment (no
+  Cloudflare account) — only the mock path is exercised by tests and the
+  local smoke test.
+- **Orchestrator.** Tasks are `wl_jobs` rows, exactly like conversion
+  jobs (M4): `createAiTask` validates the agent exists and is available,
+  then `runAiTask(db, jobId, { env, userId })` runs the agent and stores
+  the structured result. It runs synchronously in-request in local dev
+  and is structured for a Queue/Workflow consumer later (same pattern as
+  `runConversionJob`). A provider-based agent whose provider is not
+  configured fails the task with `ai_not_configured` — the task row says
+  `failed` and the error is shown, never hidden.
+- **Operating modes** (`wl_ai_mode`, default `supervised`). `manual`:
+  proposals are recorded only. `supervised`: every proposal becomes a
+  pending `wl_ai_approvals` row. `autonomous`: low-risk proposals apply
+  immediately via the applier; medium/high-risk still become approvals.
+  The orchestrator enforces the mode in `processProposals` — the mode
+  is a site setting, not a UI hint, and it is tested.
+- **Agents.** `src/ai/agents/registry.ts` holds the 15-agent roster
+  (`AGENTS`, `getAgent`, `listAgents(providerConfigured)`). Each agent
+  declares `capabilities`, a `risk` level, and `requiresProvider`.
+  Provider-based agents (content-writer, research-assistant,
+  support-responder, email-composer, social-composer) call the provider
+  and label output as AI draft; deterministic agents (seo-auditor,
+  security-scanner, performance-analyst, accessibility-checker,
+  analytics-reporter, backup-advisor, migration-assistant,
+  code-reviewer, design-advisor) read only measured site data. An agent
+  that depends on a later milestone returns an honest `unavailable`
+  result: **commerce-assistant** (needs the M8 commerce system) — the
+  orchestrator rejects its tasks with a 400 and the command centre shows
+  it unavailable.
+- **Approvals + applier.** `src/modules/ai/service.ts` owns the mode and
+  the `wl_ai_approvals` table; `src/modules/ai/apply.ts` applies
+  proposals through the existing services only (posts, options,
+  terms, themes) — never raw SQL writes to content tables. Approving
+  applies FIRST and only marks the row approved on success, so a failed
+  apply leaves the approval pending. The applier's `update_option`
+  allow-list is exactly `blogname`, `blogdescription`, `posts_per_page`
+  (1–100), `default_comment_status` (open|closed); `create_post` always
+  creates a draft; there is no delete action in M6.
+- **Website memory.** `src/ai/memory.ts` owns `wl_ai_memory` (kind
+  fact|note, unique key). `rebuildMemory` ingests site title/tagline,
+  active theme, published post/page titles (cap 100) and extensions, and
+  deletes stale facts — never admin notes. `addNote` (max 2000 chars)
+  refuses secret-like text by regex. Agents receive
+  `buildMemoryContext` (site facts + up to 20 post titles + up to 10
+  notes) in their prompt; when memory is empty the context says so
+  plainly.
+- **Command centre.** `admin/src/pages/CommandCentre.tsx` (`#/ai`):
+  provider card (select/test, recommended badge, honest not-configured
+  messaging), mode selector, agents grid, task composer, task list,
+  approvals queue, memory notes editor. All on the real API.
+- **Compat.** The AI HTTP surface is recorded in `AI_COMPAT` in
+  `src/compat/wordpress.ts` — a separate list from `WORDPRESS_COMPAT`,
+  because these are Wordless-native endpoints, not WordPress functions.
+- **Schema.** Migration `0006_m6.sql` (additive only) adds
+  `wl_ai_approvals` and `wl_ai_memory`. `REQUIRED_TABLES` in the health
+  service and `src/test/test-db.ts` cover both.
+
 ## Key decisions (see `../docs/02-architecture.md` §10 for the log)
 
 - D1 over KV/Durable Objects for relational data; sessions in D1, not JWT-only.
@@ -307,3 +395,15 @@ Worker src/index.ts ── /admin, /admin/* ──▶ env.ASSETS.fetch()
 - M4: a successful job activates a bundled extension in the running
   isolate's hook registry; cold-start extension loading is a later
   milestone.
+- M6: **Workers AI is the default and only required AI provider** (user
+  decision 2026-11-19); OpenAI-compatible is an optional fallback only.
+  The mock provider backs tests and local dev; live Workers AI calls
+  cannot be verified without a Cloudflare account and are documented,
+  not claimed.
+- M6: the orchestrator enforces the operating mode in code (manual /
+  supervised / autonomous); approvals are the human gate and applying
+  goes through the existing services, never raw SQL.
+- M6: an agent that depends on a later milestone reports itself
+  unavailable (commerce-assistant → M8) instead of faking a result.
+- M6: website memory never contains secrets; notes refuse secret-like
+  text, and facts are re-ingested from the site, never invented.
