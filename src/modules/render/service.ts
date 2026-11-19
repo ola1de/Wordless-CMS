@@ -32,6 +32,7 @@ import {
   type TemplatePostData,
 } from "../themes/templates";
 import { plainTextExcerpt, renderContent } from "./blocks";
+import { getElementorData, renderElementorData } from "../elementor/elementor";
 import { escapeHtml, layout, type NavItem } from "./theme";
 import { buildPageSeo } from "../seo/head";
 import { listProducts } from "../commerce/products";
@@ -108,11 +109,30 @@ async function toTemplatePost(db: Db, post: Post, includeTerms: boolean): Promis
     title: post.title,
     date: post.date,
     excerpt: post.excerpt ?? "",
-    contentHtml: renderContent(post.content),
+    contentHtml: await renderPostContent(db, post),
     url,
     commentCount: post.commentCount,
     terms,
   };
+}
+
+/**
+ * Render a post's body HTML (M11).
+ *
+ * When the post carries Elementor data (`_elementor_data` postmeta),
+ * the Elementor layout is rendered instead of the block content — that
+ * is what Elementor does in WordPress (it replaces the_content). When
+ * there is no Elementor data, or it renders nothing, the normal block
+ * renderer runs. The Elementor editor itself is NOT included; this is
+ * content rendering only.
+ */
+export async function renderPostContent(db: Db, post: Post): Promise<string> {
+  const elementor = await getElementorData(db, post.id);
+  if (elementor !== null) {
+    const rendered = renderElementorData(elementor);
+    if (rendered.html !== "") return rendered.html;
+  }
+  return renderContent(post.content);
 }
 
 interface FallbackPage {
@@ -296,7 +316,7 @@ export async function renderSingle(db: Db, post: Post, opts?: RenderOptions): Pr
   const body = `<article>
 <h1>${escapeHtml(post.title || "(untitled)")}</h1>
 <div class="meta">${escapeHtml(formatDate(post.date))}</div>
-${renderContent(post.content)}
+${postData.contentHtml}
 </article>${shareHtml}${comments}`;
   return finishPage(
     db,
@@ -323,11 +343,11 @@ ${renderContent(post.content)}
 export async function renderPage(db: Db, post: Post, opts?: RenderOptions): Promise<RenderedPage> {
   const site = await siteInfo(db);
   const nav = await navItems(db);
+  const postData = await toTemplatePost(db, post, false);
   const body = `<article>
 <h1>${escapeHtml(post.title || "(untitled)")}</h1>
-${renderContent(post.content)}
+${postData.contentHtml}
 </article>`;
-  const postData = await toTemplatePost(db, post, false);
   return finishPage(
     db,
     opts,

@@ -95,6 +95,8 @@ export interface ClassicReport {
   convertible: number;
   partial: number;
   blocked: number;
+  /** M11 auto-conversion record (set by the import, not the analyser). */
+  conversion?: import("../conversion/auto-convert").AutoConvertReport;
   /** What the import did and did not do. */
   notes: string[];
 }
@@ -137,6 +139,7 @@ export function analyzeClassicTheme(files: Map<string, string>): ClassicReport |
         hooks: [],
         wpCalls: [],
         optionKeys: [],
+        optionDefaults: [],
         httpCalls: [],
         features: [],
         unconvertible: [

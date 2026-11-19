@@ -23,7 +23,7 @@ import type { Post } from "../posts/types";
 import { verifyUploadBytes } from "../security/magic";
 import type { MediaStorage } from "./storage";
 
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
@@ -196,6 +196,25 @@ export async function getMediaRecord(db: Db, id: number): Promise<MediaRecord | 
   if (!post || post.type !== "attachment") return null;
   const { objectKey, meta } = await readMeta(db, id);
   return toRecord(post, objectKey, meta);
+}
+
+/** Move an attachment's stored object key (file-manager rename). Updates _wp_attached_file and the metadata filename. Returns the record, or null when the key is not an attachment. */
+export async function renameMediaObject(db: Db, oldKey: string, newKey: string): Promise<MediaRecord | null> {
+  const record = await findMediaByKey(db, oldKey);
+  if (record === null) return null;
+  const { meta } = await readMeta(db, record.id);
+  await execRun(db, "UPDATE wp_postmeta SET meta_value = ? WHERE post_id = ? AND meta_key = ?", [
+    newKey,
+    record.id,
+    ATTACHED_FILE_KEY,
+  ]);
+  const updatedMeta: AttachmentMeta = { ...meta, filename: newKey.split("/").pop() ?? meta.filename };
+  await execRun(db, "UPDATE wp_postmeta SET meta_value = ? WHERE post_id = ? AND meta_key = ?", [
+    JSON.stringify(updatedMeta),
+    record.id,
+    METADATA_KEY,
+  ]);
+  return getMediaRecord(db, record.id);
 }
 
 /** Find an attachment by its R2 object key (powers GET /media/:key). */

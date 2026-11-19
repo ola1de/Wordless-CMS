@@ -32,6 +32,16 @@ import {
 import { analyzeClassicTheme, parseStyleCssHeader, type ClassicReport } from "./classic";
 import { extractThemeZip, zipTextFile, zipTextFilesUnder } from "./zip";
 import {
+  collectOptionDefaults,
+  convertPhpFiles,
+  mergeSettingsReports,
+  migrateOptionDefaults,
+  summarizeThemeJsonSettings,
+} from "../conversion/auto-convert";
+
+/** Single definition of the theme ZIP limits lives in ./zip (M11 consolidation). */
+export { MAX_THEME_FILES, MAX_THEME_ZIP_BYTES } from "./zip";
+import {
   DEFAULT_THEME_AUTHOR,
   DEFAULT_THEME_FILES,
   DEFAULT_THEME_JSON,
@@ -51,8 +61,6 @@ import {
   type ThemeRecord,
   type ThemeVariation,
 } from "./types";
-
-export const MAX_THEME_ZIP_BYTES = 5 * 1024 * 1024;
 
 interface ThemeRow {
   slug: string;
@@ -382,14 +390,28 @@ export async function importTheme(
   const generated = generateThemeCss(parsed);
   const styleCssText = new TextDecoder().decode(styleCss);
   const stylesheet = `${generated}\n${styleCssText}`;
+  // M11 (auto-convert): convert the theme's PHP (functions.php, …)
+  // with the M4 engine, store the generated TypeScript under
+  // themes/<slug>/converted/, and carry settings over — literal PHP
+  // option defaults as Wordless options, theme.json settings as CSS
+  // presets (applied by the theme engine). The look (theme.json, CSS,
+  // templates, patterns) already carries over via the import itself.
+  const converted = convertPhpFiles(files, slug, "theme");
+  const phpSettings = await migrateOptionDefaults(db, collectOptionDefaults(files));
+  const themeJsonSettings = summarizeThemeJsonSettings(themeJson, parsed.unsupported);
+  const settings = mergeSettingsReports(phpSettings, themeJsonSettings);
   const report = {
     kind: "block-theme-import",
     version: parsed.version,
     warnings: [...warnings, ...parsed.warnings.map((w) => `${w.path}: ${w.message}`)],
     unsupported: parsed.unsupported,
     files: [...files.keys()].sort(),
+    conversion: { ...converted.report, settings },
   };
   await storeThemeFiles(storage, slug, files);
+  for (const [path, code] of converted.generated) {
+    await storage.put(`themes/${slug}/${path}`, new TextEncoder().encode(code), "text/typescript");
+  }
   await upsertThemeRow(db, {
     slug,
     name: header.name,
@@ -441,7 +463,19 @@ export async function importClassicTheme(
     throw badRequest(`A theme with slug "${DEFAULT_SLUG}" already exists (the built-in default).`);
   }
   const stylesheet = new TextDecoder().decode(styleCss);
+  // M11 (auto-convert): convert the theme's PHP with the M4 engine and
+  // carry literal option defaults over as Wordless options. Generated
+  // TypeScript is stored under themes/<slug>/converted/; never executed.
+  const converted = convertPhpFiles(files, slug, "theme");
+  const settings = await migrateOptionDefaults(
+    db,
+    report.files.flatMap((f) => f.optionDefaults),
+  );
+  report.conversion = { ...converted.report, settings };
   await storeThemeFiles(storage, slug, files);
+  for (const [path, code] of converted.generated) {
+    await storage.put(`themes/${slug}/${path}`, new TextEncoder().encode(code), "text/typescript");
+  }
   await upsertThemeRow(db, {
     slug,
     name: report.header.name,

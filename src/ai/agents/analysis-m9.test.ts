@@ -70,7 +70,7 @@ describe("security-scanner (Milestone 9, real checks)", () => {
     expect(data.lockedKeys).toBe(0);
     expect(data.headers).toContain("Content-Security-Policy");
     expect(data.uploadAllowlist).toContain("image/jpeg");
-    expect(data.maxUploadBytes).toBe(10 * 1024 * 1024);
+    expect(data.maxUploadBytes).toBe(50 * 1024 * 1024);
 
     // After 2FA is enabled and a lockout is recorded, the agent reports both.
     const nowMs = 1_800_000_000_000;

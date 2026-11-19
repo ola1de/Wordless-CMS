@@ -8,6 +8,44 @@ verified by read-back. Nothing is listed here that the tests do not
 cover; the honest limits for each milestone live in `README.md` and
 `docs/IMPLEMENTATION_STATUS.md`.
 
+## 1.1.0 — Milestone 11: bigger uploads, plugin compatibility, auto-convert, Elementor rendering, file manager
+
+**Tests: 465 passed, 4 skipped (469 total, 48 files).** Smoke test: 48/48 (`smoke-m11.sh`, port 8796).
+
+- **Raised upload limits (Part A):** theme ZIPs 200 files / 5 MB → 10,000 files / 50 MB; marketplace ZIPs
+  100 files / 2 MB → 10,000 files / 50 MB; media uploads 10 MB → 50 MB; WXR/SQL imports 10 MB → 50 MB.
+  The duplicated theme-ZIP byte cap (`service.ts` vs `zip.ts`) is consolidated to a single definition in
+  `zip.ts` (re-exported from `service.ts`). Honest limit: 50 MB is the configured cap; uploads near the cap can
+  still be slow or fail on the Cloudflare free tier (128 MB Worker memory, request buffering) — chunked/resumable
+  upload is a future improvement, not this milestone.
+- **Plugin compatibility analyser (Part B):** every marketplace install runs the M4 PHP analyser over its PHP
+  files and stores a per-plugin report (`wl_extensions.report_json`, migration `0010_m11.sql`): files analysed,
+  convertible / partial / blocked / unparsed counts, top blocking reasons with file paths, per-file verdicts
+  (capped at 500, partial/blocked first). Exposed at `GET /api/marketplace/:slug/report` and shown on the
+  Commerce → Marketplace tab. A plugin is never labelled as working while its report shows partial/blocked files.
+  Installed code is never executed.
+- **Auto-convert on upload (M11 addition):** theme imports (block + classic) and marketplace installs now also
+  run the M4 engine (`convertPhp`) over every PHP file (max 500 files, 1 MB per file) and store the generated
+  TypeScript in R2 under `<prefix>/converted/<path>.ts` — stored, never executed. Literal `get_option()`
+  defaults are carried over as Wordless options (existing options are never overwritten) and a theme's
+  `theme.json` settings are reported as applied (CSS presets) or skipped with a reason. Every upload produces a
+  per-file conversion record (converted / partial / blocked + reason) and a settings-migration report, stored
+  with the theme/plugin and shown in admin. "Exact, nothing lost" conversion of arbitrary PHP is not possible —
+  dynamic behaviour, hooks/filters with no Wordless equivalent, AJAX handlers and class-heavy code cannot all
+  convert — so the record is transparent instead of silent. Twenty Twenty-Five core files verified in the M11
+  smoke test (see `docs/IMPLEMENTATION_STATUS.md` for the actual numbers).
+- **Elementor content renderer (Part C):** pages carrying `_elementor_data` postmeta render their Elementor
+  layout on the public site (sections → columns → widgets) for heading, text-editor, image, button, spacer,
+  divider, video, icon-list, image-box and google-maps. Unknown widgets render nothing and are listed as
+  unsupported; icon glyphs are not rendered (no icon font is bundled). This renders Elementor *content* — the
+  Elementor drag-and-drop editor itself is NOT included; pages are edited in Wordless's own block editor (the
+  editor shows a notice on Elementor posts). All text is escaped, URLs must be http(s) or site-relative.
+- **File manager (Part D):** new admin Files page (`#/files`) listing the R2 bucket with folder navigation by
+  prefix (name, size, type, modified), upload (≤50 MB, media MIME allowlist + magic-byte sniffing), download,
+  rename and delete. All routes need `manage_options`. No shell access, no in-place editing; `extensions/`,
+  `themes/`, `backups/` and `imports/` are read-only here (owned by their own pages). Path traversal is
+  rejected. Deleting a media attachment removes its library record too; renaming one updates its record.
+
 ## Unreleased — UI redesign (post-1.0.0)
 
 **Tests: 420 passed, 4 skipped (424 total, 44 files).** Smoke test: 27/27.

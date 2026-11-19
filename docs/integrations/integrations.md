@@ -143,7 +143,7 @@ ZIP upload; no remote directory yet.
 
 - `GET /api/marketplace` (`install_plugins`) — installed extensions.
 - `POST /api/marketplace/install` (`install_plugins`, multipart
-  `file`) — validates the ZIP (≤ 2 MB, ≤ 100 files, no path traversal,
+  `file`) — validates the ZIP (≤ 50 MB, ≤ 10,000 files, no path traversal,
   single top-level folder stripped) and requires a `wordless.json`
   manifest with `slug`, `name`, `version` (`x.y.z`) and `kind`
   (`plugin` | `theme`). Files go to R2 `extensions/<slug>/`; a row is

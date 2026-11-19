@@ -345,6 +345,16 @@ export function EditorPage({
     <div>
       {error ? <ErrorBox message={error} onDismiss={() => setError(null)} /> : null}
       {notice ? <div className="notice">{notice}</div> : null}
+      {post?.hasElementorData === true && (
+        <div className="card">
+          <p style={{ margin: 0 }}>
+            <strong>Elementor content.</strong> This {type === "page" ? "page" : "post"} was built with Elementor.
+            Wordless renders the Elementor layout on the public site; the Elementor drag-and-drop editor itself is not
+            included. Edits below change the stored block content — the public site keeps showing the Elementor layout
+            while its data is present.
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <div className="field">

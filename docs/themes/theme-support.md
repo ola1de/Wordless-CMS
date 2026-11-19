@@ -132,7 +132,7 @@ real Twenty Twenty-Five theme: its `home.html` (header/footer parts +
 ## Import guide
 
 Admin → Themes → Import, or `POST /api/themes/import` (multipart `.zip`,
-max 5 MB, `edit_theme_options` capability). The ZIP must contain
+max 50 MB and 10,000 files, `edit_theme_options` capability). The ZIP must contain
 `style.css` (with a `Theme Name:` header) and `theme.json` at its root,
 or inside a single top-level folder (stripped on import). Entries with
 `..` or absolute paths are rejected. Files go to R2 under

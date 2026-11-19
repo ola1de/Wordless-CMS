@@ -1,5 +1,5 @@
 {
-  "description": "WORDLESS — autonomous website operating system. PHP-independent, WordPress-compatible CMS on Cloudflare Workers (TypeScript). Version 1.0.0.",
+  "description": "WORDLESS — autonomous website operating system. PHP-independent, WordPress-compatible CMS on Cloudflare Workers (TypeScript). Version 1.1.0.",
   "dependencies": {
     "fast-xml-parser": "^5.12.1",
     "fflate": "^0.8.3",
@@ -34,5 +34,5 @@
     "deploy:production": "node scripts/deploy.mjs --env production --confirm"
   },
   "type": "module",
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

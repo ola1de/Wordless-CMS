@@ -279,7 +279,7 @@ CHANGELOG.md          release history, M1–M10 with test counts + commit SHAs
 docs/release.md       release procedure: tagging, checklist, rollback (M10)
 ```
 
-## API (Version 1.0.0)
+## API (Version 1.1.0)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -343,7 +343,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `DELETE /api/users/:id` | `edit_users` | Delete; refused (400) when the user owns posts |
 | `POST /api/users/:id/reset-password` | `edit_users` | Temporary password, returned once |
 | `GET /api/media` | `upload_files` | List media (`?mime=&page=&per_page=`) |
-| `POST /api/media` | `upload_files` | Multipart upload (10 MB cap, MIME allowlist) |
+| `POST /api/media` | `upload_files` | Multipart upload (50 MB cap, MIME allowlist) |
 | `GET /api/media/:id` | `upload_files` | Get one media item |
 | `PUT /api/media/:id` | `upload_files` | Update alt text |
 | `DELETE /api/media/:id` | `upload_files` | Delete R2 object + post + meta |
@@ -355,7 +355,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `GET /api/extensions` | `install_plugins` | Installed extensions (`wl_extensions`) |
 | `GET /api/themes` | `edit_theme_options` | List themes (`wl_themes`) |
 | `GET /api/themes/active` | — | Active theme + saved variation (if any) |
-| `POST /api/themes/import` | `edit_theme_options` | Import a block theme ZIP (≤5 MB; `style.css` + `theme.json`) |
+| `POST /api/themes/import` | `edit_theme_options` | Import a block theme ZIP (≤50 MB, ≤10,000 files; `style.css` + `theme.json`) |
 | `POST /api/themes/import-classic` | `edit_theme_options` | Import a classic theme ZIP: stylesheet + per-file analysis report |
 | `GET /api/themes/:slug` | `edit_theme_options` | Theme detail: theme.json, stylesheet, files, report |
 | `POST /api/themes/:slug/activate` | `edit_theme_options` | Activate (busts the theme CSS cache via the hash) |
@@ -387,8 +387,14 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `GET /api/integrations/analytics/status` | `manage_options` | Analytics provider + measurement id, configured/not |
 | `GET /api/integrations/cloudflare` | `manage_options` | Bindings actually present in this environment (read-only) |
 | `GET /api/marketplace` | `install_plugins` | Marketplace extensions (local-ZIP skeleton) |
-| `POST /api/marketplace/install` | `install_plugins` | Install an extension from a ZIP upload (`wordless.json`, ≤2 MB) |
+| `POST /api/marketplace/install` | `install_plugins` | Install an extension from a ZIP upload (`wordless.json`, ≤50 MB, ≤10,000 files) |
+| `GET /api/marketplace/:slug/report` | `install_plugins` | Per-plugin compatibility + auto-conversion report (null = never analysed) |
 | `POST /api/marketplace/:slug/activate\|deactivate` | `install_plugins` | Activate / deactivate an installed extension |
+| `GET /api/files?prefix=` | `manage_options` | File manager: folders + files under a prefix (≤1,000 entries) |
+| `POST /api/files/upload` | `manage_options` | File manager: multipart upload (≤50 MB, media MIME allowlist + magic-byte sniffing) |
+| `GET /api/files/download?key=` | `manage_options` | File manager: download one file |
+| `POST /api/files/rename` | `manage_options` | File manager: rename (`{key, newName}`); media library records follow |
+| `POST /api/files/delete` | `manage_options` | File manager: delete (`{key}`); media library records are removed too |
 | `GET /api/commerce/products` | —* | Published products only (admins may pass `?status=draft|all`) |
 | `POST /api/commerce/products` | `manage_options` | Create a product (price in integer minor units) |
 | `GET /api/commerce/products/:id` | —* | One product (drafts need `manage_options`) |
@@ -444,8 +450,8 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `GET /api/backup/:id/download` | `manage_options` | Download the backup ZIP |
 | `POST /api/backup/:id/verify` | `manage_options` | Re-read the bundle and recompute checksums |
 | `POST /api/backup/:id/restore` | `manage_options` | Restore (typed confirmation `RESTORE`, verified backup only) |
-| `POST /api/import/wxr` | `manage_options` | Import a WXR export (multipart ≤10 MB, wl_jobs job) |
-| `POST /api/import/sql` | `manage_options` | Import a mysqldump (≤10 MB, 12 wp_* tables only) |
+| `POST /api/import/wxr` | `manage_options` | Import a WXR export (multipart ≤50 MB, wl_jobs job) |
+| `POST /api/import/sql` | `manage_options` | Import a mysqldump (≤50 MB, 12 wp_* tables only) |
 | `GET /api/import/jobs/:id` | `manage_options` | One import job with its per-item report |
 
 \* Draft/private posts require a logged-in user; trashed posts are never returned.
@@ -629,7 +635,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   layout widths, and a deterministic cyrb53 stylesheet hash.
 - **Theme registry + storage** (`migrations/0005_m5.sql`, `wl_themes`).
   `GET /api/themes`, `GET /api/themes/:slug`, `POST /api/themes/import`
-  (multipart ZIP ≤5 MB, extracted with `fflate`, validated: `style.css`
+  (multipart ZIP ≤50 MB, ≤10,000 files, extracted with `fflate`, validated: `style.css`
   header + `theme.json`; path traversal rejected), `POST
   /api/themes/import-classic`, `POST /api/themes/:slug/activate`, `POST
   /api/themes/:slug/delete` (refuses the active theme and the built-in
@@ -975,7 +981,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   configured.
 - **Marketplace skeleton** (`src/modules/integrations/marketplace.ts`).
   Install from a ZIP upload (`wordless.json` manifest with slug/name/
-  version/kind plugin|theme; ≤2 MB, ≤100 files, path traversal
+  version/kind plugin|theme; ≤50 MB, ≤10,000 files, path traversal
   rejected), files in R2 `extensions/<slug>/`, row in `wl_extensions`
   (inactive), activate/deactivate via the admin Commerce → Marketplace
   tab. No remote directory, and installed code is never executed by the
@@ -1046,7 +1052,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   minutes), `GET /api/auth/sessions` (no token values ever shown) and
   `POST /api/auth/sessions/revoke-all`.
 - **Upload hardening** (`src/modules/security/magic.ts`). The M3
-  allowlist (jpeg/png/gif/webp/avif/svg/pdf, 10 MB) plus magic-byte
+  allowlist (jpeg/png/gif/webp/avif/svg/pdf, 50 MB) plus magic-byte
   sniffing on the first bytes of every upload — a PHP file renamed to
   `.jpg` is rejected, and SVGs are checked for scripts, `javascript:`
   URLs and event handlers. Wired into `uploadMedia`, so the compat
@@ -1095,7 +1101,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   (option `wl_backup_retention`). Admin `#/backup` runs the whole flow.
   `wl_backups` and `wl_jobs` are excluded from backups by design.
 - **WordPress importer** (`src/modules/importer/`). `POST
-  /api/import/wxr` (multipart, ≤10 MB, `wl_jobs` job) parses WXR with
+  /api/import/wxr` (multipart, ≤50 MB, `wl_jobs` job) parses WXR with
   a real XML parser (`fast-xml-parser` — never regex): authors, categories/tags,
   posts/pages (block content verbatim), comments, attachments (URL
   fetch → R2; failed fetches recorded per item). `POST /api/import/sql`
@@ -1258,6 +1264,68 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   procedural PHP subset well and records everything else honestly —
   never claim a plugin converts until its own report says so.
 
+## What Milestone 11 is
+
+- **Bigger uploads.** Theme ZIPs 200 files / 5 MB → 10,000 files / 50 MB;
+  marketplace ZIPs 100 files / 2 MB → 10,000 files / 50 MB; media uploads
+  10 MB → 50 MB; WXR/SQL imports 10 MB → 50 MB. The duplicated theme-ZIP
+  byte cap is consolidated to one definition (`src/modules/themes/zip.ts`).
+- **Plugin compatibility reports.** Every marketplace install runs the M4
+  PHP analyser over its PHP files and stores a per-plugin report: files
+  analysed, convertible / partial / blocked / unparsed counts, top
+  blocking reasons with file paths, per-file verdicts (capped at 500,
+  partial/blocked first). Shown on Commerce → Marketplace and at
+  `GET /api/marketplace/:slug/report`. A plugin is never labelled as
+  working while its report shows partial or blocked files. Installed
+  code is never executed.
+- **Auto-convert on upload.** Theme imports (block + classic) and
+  marketplace installs automatically run the M4 converter over the PHP
+  files (max 500 files, 1 MB per file) and store the generated TypeScript
+  in R2 under `<prefix>/converted/<path>.ts` — stored, never executed.
+  Literal `get_option()` defaults are carried over as Wordless options
+  (existing options are never overwritten), and a theme's `theme.json`
+  settings are reported as applied (CSS presets) or skipped with a
+  reason. Every upload produces a per-file conversion record
+  (converted / partial / blocked + reason) and a settings-migration
+  report, stored with the theme/plugin and shown in admin.
+- **Elementor content rendering.** Posts carrying `_elementor_data`
+  postmeta render their Elementor layout on the public site (sections →
+  columns → widgets) for heading, text-editor, image, button, spacer,
+  divider, video, icon-list, image-box and google-maps. Unknown widgets
+  render nothing and are collected as unsupported; icon glyphs are not
+  rendered (no icon font is bundled). The editor shows a notice on
+  Elementor posts. This renders Elementor *content* — the Elementor
+  drag-and-drop editor itself is NOT included; pages are edited in
+  Wordless's own block editor.
+- **File manager.** New admin Files page (`#/files`): the R2 bucket with
+  folder navigation by prefix (name, size, type, modified), upload
+  (≤50 MB, media MIME allowlist + magic-byte sniffing), download, rename
+  and delete — all `manage_options`. No shell access, no in-place
+  editing; `extensions/`, `themes/`, `backups/` and `imports/` are
+  read-only here (owned by their own pages); path traversal is rejected.
+
+## What Milestone 11 is not
+
+- **Not a guarantee that a 50 MB upload will succeed.** 50 MB is the
+  configured cap; uploads near the cap can still be slow or fail on the
+  Cloudflare free tier (128 MB Worker memory, request buffering).
+  Chunked/resumable upload is a future improvement, not this milestone.
+- **Not exact, nothing-lost conversion.** Dynamic PHP behaviour,
+  WordPress hooks/filters with no Wordless equivalent, AJAX handlers and
+  class-heavy code cannot all convert — the per-file record and the
+  settings report say exactly what converted, what was partial and what
+  was blocked. Never claim a theme or plugin converted exactly when the
+  record shows partial/blocked items.
+- **Not running converted code.** Auto-converted TypeScript is stored in
+  R2 and never executed; a converted plugin does not run until a later
+  milestone loads generated extensions.
+- **Not the Elementor editor.** Only Elementor *content* renders; the
+  drag-and-drop editor is a separate JS application and is not included.
+  Do not imply full Elementor compatibility anywhere.
+- **Not a shell or code editor.** The file manager cannot edit files
+  in place, cannot run commands, and cannot touch the D1 theme blobs
+  (the theme editor covers themes).
+
 ## What Milestone 3 is
 
 - **React admin SPA** at `/admin` (Vite + React + TypeScript, plain CSS in
@@ -1283,7 +1351,7 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   Save Draft / Publish go through the posts API (each save creates a
   revision); autosave fires 20 s after the last edit; Preview opens the
   public post URL once published. The media picker inserts image blocks.
-- **Media uploads.** `POST /api/media` (multipart, 10 MB cap, MIME
+- **Media uploads.** `POST /api/media` (multipart, 50 MB cap, MIME
   allowlist jpeg/png/gif/webp/avif/svg/pdf — anything else is a 400) stores
   the file in R2 via the `MEDIA` binding, creates the attachment post and
   postmeta (filename, size, alt); list/get/alt-update/delete endpoints and

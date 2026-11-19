@@ -14,6 +14,13 @@
 import type { R2Bucket } from "@cloudflare/workers-types";
 import { stubError } from "../../kernel/errors";
 
+export interface StorageObjectInfo {
+  key: string;
+  size: number;
+  /** Upload time (R2 `uploaded`); null when the backend does not report one. */
+  uploaded: Date | null;
+}
+
 export interface MediaStorage {
   put(key: string, data: Uint8Array, contentType: string): Promise<{ key: string; size: number }>;
   get(key: string): Promise<{ data: Uint8Array; contentType: string } | null>;
@@ -21,6 +28,8 @@ export interface MediaStorage {
   exists(key: string): Promise<boolean>;
   /** Keys starting with `prefix` (used by themes: `themes/<slug>/`). */
   list(prefix: string): Promise<string[]>;
+  /** Objects starting with `prefix`, with size + upload time (M11 file manager). */
+  listObjects(prefix: string): Promise<StorageObjectInfo[]>;
 }
 
 export class StubMediaStorage implements MediaStorage {
@@ -42,6 +51,10 @@ export class StubMediaStorage implements MediaStorage {
 
   async list(): Promise<string[]> {
     throw stubError("R2 media object list (StubMediaStorage.list)");
+  }
+
+  async listObjects(): Promise<StorageObjectInfo[]> {
+    throw stubError("R2 media object list (StubMediaStorage.listObjects)");
   }
 }
 
@@ -84,5 +97,18 @@ export class R2MediaStorage implements MediaStorage {
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor !== undefined);
     return keys;
+  }
+
+  async listObjects(prefix: string): Promise<StorageObjectInfo[]> {
+    const out: StorageObjectInfo[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.bucket.list({ prefix, cursor });
+      for (const obj of page.objects) {
+        out.push({ key: obj.key, size: obj.size, uploaded: obj.uploaded ?? null });
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor !== undefined);
+    return out;
   }
 }

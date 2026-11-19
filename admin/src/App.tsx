@@ -25,6 +25,7 @@ import { IntegrationsPage } from "./pages/Integrations";
 import { SecurityPage } from "./pages/Security";
 import { BackupPage } from "./pages/Backup";
 import { ImportPage } from "./pages/Import";
+import { FilesPage } from "./pages/Files";
 
 export interface AppSettings {
   timezone: string;
@@ -37,6 +38,7 @@ const NAV: Array<{ hash: string; label: string; icon: IconName; group: string }>
   { hash: "#/posts", label: "Posts", icon: "posts", group: "Content" },
   { hash: "#/pages", label: "Pages", icon: "pages", group: "Content" },
   { hash: "#/media", label: "Media", icon: "media", group: "Content" },
+  { hash: "#/files", label: "Files", icon: "file", group: "Content" },
   { hash: "#/terms", label: "Categories & Tags", icon: "terms", group: "Content" },
   { hash: "#/comments", label: "Comments", icon: "comments", group: "Content" },
   { hash: "#/menus", label: "Menus", icon: "menus", group: "Content" },
@@ -195,6 +197,9 @@ export function App(): React.ReactElement {
       break;
     case "media":
       page = <MediaPage />;
+      break;
+    case "files":
+      page = <FilesPage />;
       break;
     case "terms":
       page = <TermsPage />;

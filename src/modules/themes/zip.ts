@@ -10,8 +10,8 @@
 import { unzipSync } from "fflate";
 import { badRequest } from "../../kernel/errors";
 
-export const MAX_THEME_ZIP_BYTES = 5 * 1024 * 1024;
-export const MAX_THEME_FILES = 200;
+export const MAX_THEME_ZIP_BYTES = 50 * 1024 * 1024;
+export const MAX_THEME_FILES = 10000;
 
 export const ALLOWED_THEME_EXTENSIONS = new Set([
   ".html",
@@ -49,7 +49,7 @@ export function extractThemeZip(data: Uint8Array): ExtractedThemeZip {
   }
   if (data.byteLength > MAX_THEME_ZIP_BYTES) {
     throw badRequest(
-      `Theme ZIP is ${data.byteLength} bytes; the limit is ${MAX_THEME_ZIP_BYTES} bytes (5 MB).`,
+      `Theme ZIP is ${data.byteLength} bytes; the limit is ${MAX_THEME_ZIP_BYTES} bytes (50 MB).`,
     );
   }
   let raw: Record<string, Uint8Array>;

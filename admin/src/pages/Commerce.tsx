@@ -562,8 +562,11 @@ export function CommercePage(): React.ReactElement {
         <section>
           <h3>Marketplace</h3>
           <p className="muted">
-            Skeleton: install extensions from a ZIP with a <code>wordless.json</code> manifest (≤2 MB, ≤100 files). No
-            remote directory yet, and installed code is never executed by the install itself.
+            Install extensions from a ZIP with a <code>wordless.json</code> manifest (≤50 MB, ≤10,000 files). Every
+            install is analysed and auto-converted on upload: the compatibility report and per-file conversion record
+            are shown below, and literal option defaults are carried over as Wordless options. Installed code is never
+            executed — a plugin only runs after its converted code is loaded, which is a later milestone. A plugin is
+            never labelled as working while its report shows partial or blocked files.
           </p>
           <form onSubmit={(e) => void installZip(e)} className="form-grid">
             <label>
@@ -594,7 +597,31 @@ export function CommercePage(): React.ReactElement {
               <tbody>
                 {extensions.map((x) => (
                   <tr key={x.slug}>
-                    <td>{x.name}</td>
+                    <td>
+                      {x.name}
+                      {x.report && (
+                        <p className="hint" style={{ margin: "4px 0" }}>
+                          Compatibility: {x.report.verdict} — {x.report.convertible} convertible · {x.report.partial}{" "}
+                          partial · {x.report.blocked} blocked · {x.report.unparsed} unparsed (of {x.report.phpFiles}{" "}
+                          PHP files)
+                          {x.report.conversion !== null &&
+                            ` · Auto-convert: ${x.report.conversion.converted} converted · ${x.report.conversion.partial} partial · ${x.report.conversion.blocked} blocked; settings carried over: ${x.report.conversion.settings.carriedOver.length}`}
+                          {x.report.verdict === "blocked" && " — not working; see the reasons below."}
+                        </p>
+                      )}
+                      {x.report && x.report.topReasons.length > 0 && (
+                        <details>
+                          <summary>Top blocking reasons</summary>
+                          <ul>
+                            {x.report.topReasons.map((r) => (
+                              <li key={r.kind}>
+                                {r.kind} × {r.count} — {r.files.join(", ")}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </td>
                     <td>{x.version}</td>
                     <td>{x.kind}</td>
                     <td>{x.status}</td>

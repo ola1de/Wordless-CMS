@@ -17,12 +17,14 @@ import { unzipSync } from "fflate";
 import { badRequest } from "../../kernel/errors";
 import { requireString } from "../../kernel/validate";
 import type { MediaStorage } from "../media/storage";
-import { installExtension, listExtensions, setExtensionStatus } from "../extensions/service";
+import { getExtension, installExtension, listExtensions, setExtensionStatus } from "../extensions/service";
 import type { ExtensionRecord } from "../extensions/service";
 import type { Db } from "../../db";
+import { analyzePluginFiles, type PluginCompatibilityReport } from "./compat-report";
+import { convertPhpFiles, migrateOptionDefaults } from "../conversion/auto-convert";
 
-export const MAX_MARKETPLACE_ZIP_BYTES = 2 * 1024 * 1024;
-export const MAX_MARKETPLACE_FILES = 100;
+export const MAX_MARKETPLACE_ZIP_BYTES = 50 * 1024 * 1024;
+export const MAX_MARKETPLACE_FILES = 10000;
 
 export interface MarketplaceManifest {
   slug: string;
@@ -35,6 +37,8 @@ export interface MarketplaceManifest {
 export interface MarketplaceInstallResult {
   extension: ExtensionRecord;
   files: number;
+  /** M11: PHP analyser report for the installed files (null only when there is nothing to analyse). */
+  report: PluginCompatibilityReport;
 }
 
 function decodeText(data: Uint8Array): string {
@@ -80,7 +84,7 @@ export async function installExtensionFromZip(
   }
   if (data.byteLength === 0) throw badRequest("The uploaded ZIP is empty.");
   if (data.byteLength > MAX_MARKETPLACE_ZIP_BYTES) {
-    throw badRequest(`The ZIP is ${data.byteLength} bytes; the limit is ${MAX_MARKETPLACE_ZIP_BYTES} bytes (2 MB).`);
+    throw badRequest(`The ZIP is ${data.byteLength} bytes; the limit is ${MAX_MARKETPLACE_ZIP_BYTES} bytes (50 MB).`);
   }
   let raw: Record<string, Uint8Array>;
   try {
@@ -113,9 +117,24 @@ export async function installExtensionFromZip(
     throw badRequest('The ZIP must contain a wordless.json manifest at its root (slug, name, version, kind).');
   }
   const manifest = parseManifest(decodeText(manifestRaw));
+  // M11: analyse the PHP files before anything is stored, so the
+  // install carries an honest compatibility report. Analysis only
+  // parses source text — no uploaded code is executed, ever.
+  const report = analyzePluginFiles(files);
+  // M11 (auto-convert): convert every PHP file with the M4 engine and
+  // carry literal option defaults over as Wordless options. The
+  // generated TypeScript is stored next to the originals; it is never
+  // executed. See src/modules/conversion/auto-convert.ts for the
+  // honest limits.
+  const converted = convertPhpFiles(files, manifest.slug, "plugin");
+  const settings = await migrateOptionDefaults(db, report.optionDefaults);
+  report.conversion = { ...converted.report, settings };
   // Store files first; the wl_extensions row is the record of the install.
   for (const [path, bytes] of files) {
     await storage.put(`extensions/${manifest.slug}/${path}`, bytes, "application/octet-stream");
+  }
+  for (const [path, code] of converted.generated) {
+    await storage.put(`extensions/${manifest.slug}/${path}`, new TextEncoder().encode(code), "text/typescript");
   }
   const extension = await installExtension(db, {
     slug: manifest.slug,
@@ -124,12 +143,22 @@ export async function installExtensionFromZip(
     kind: manifest.kind,
     source: "marketplace:upload",
     status: "inactive",
+    report,
   });
-  return { extension, files: files.size };
+  return { extension, files: files.size, report };
 }
 
 export async function listMarketplaceExtensions(db: Db): Promise<ExtensionRecord[]> {
   return listExtensions(db);
+}
+
+/** The stored compatibility report for one installed extension (null = never analysed). */
+export async function getMarketplaceExtensionReport(
+  db: Db,
+  slug: string,
+): Promise<PluginCompatibilityReport | null> {
+  const extension = await getExtension(db, slug);
+  return extension.report;
 }
 
 export async function setMarketplaceExtensionStatus(

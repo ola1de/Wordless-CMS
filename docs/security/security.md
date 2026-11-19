@@ -122,7 +122,7 @@ Sessions already stored only SHA-256 hashes of the token in D1
 ## Upload hardening
 
 Uploads keep the M3 allowlist (jpeg/png/gif/webp/avif/svg/pdf,
-10 MB) and add **magic-byte sniffing** on the first bytes of every
+50 MB) and add **magic-byte sniffing** on the first bytes of every
 upload (`src/modules/security/magic.ts`, wired into `uploadMedia`
 so the compat `media_handle_upload` path gets it too):
 

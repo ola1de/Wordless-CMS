@@ -26,6 +26,8 @@ export interface Post {
   commentCount: number;
   /** Per-post SEO fields (Milestone 7) — present on the detail payload. */
   seo?: PostSeo;
+  /** True when the post carries Elementor data (Milestone 11) — present on the detail payload. */
+  hasElementorData?: boolean;
 }
 
 /** SEO (Milestone 7). */
@@ -572,14 +574,76 @@ export interface WebhookLogList {
   totalPages: number;
 }
 
+export interface PluginCompatibilityReport {
+  phpFiles: number;
+  totalFiles: number;
+  convertible: number;
+  partial: number;
+  blocked: number;
+  unparsed: number;
+  skipped: number;
+  verdict: "compatible" | "partial" | "blocked" | "not-analysed";
+  topReasons: Array<{ kind: string; count: number; files: string[] }>;
+  files: Array<{ file: string; verdict: string; reasons: string[] }>;
+  filesTruncated: boolean;
+  optionDefaults: Array<{ key: string; defaultValue: string | number | boolean; file: string }>;
+  conversion: AutoConvertReport | null;
+  analysedAt: string;
+}
+
+export interface AutoConvertReport {
+  kind: "theme" | "plugin";
+  slug: string;
+  phpFiles: number;
+  converted: number;
+  partial: number;
+  blocked: number;
+  skipped: number;
+  files: Array<{
+    file: string;
+    status: "converted" | "partial" | "blocked";
+    functionsConverted: string[];
+    hooksConverted: string[];
+    unconverted: Array<{ kind: string; name?: string; reason: string; line: number }>;
+    reason: string;
+    generatedPath: string | null;
+  }>;
+  filesTruncated: boolean;
+  settings: {
+    carriedOver: Array<{ key: string; value: string | number | boolean; source: string; reason?: string }>;
+    skipped: Array<{ key: string; value: string | number | boolean; source: string; reason?: string }>;
+  };
+  convertedAt: string;
+}
+
 export interface MarketplaceExtension {
   slug: string;
   name: string;
   version: string;
   kind: string;
   status: string;
+  /** M11 compatibility + auto-conversion report (null = never analysed). */
+  report?: PluginCompatibilityReport | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/* Milestone 11 types — file manager. */
+
+export interface FileEntry {
+  key: string;
+  name: string;
+  size: number;
+  type: string;
+  modified: string | null;
+  isMedia: boolean;
+}
+
+export interface FileListResult {
+  prefix: string;
+  folders: string[];
+  files: FileEntry[];
+  truncated: boolean;
 }
 
 /* Milestone 9 types — security, backup, importer, derivatives. */

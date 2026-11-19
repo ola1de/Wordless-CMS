@@ -47,7 +47,7 @@ export function ImportPage(): React.ReactElement {
       <div className="card">
         <p>
           Import a WordPress site into Wordless. WXR (WordPress eXtended RSS) or a mysqldump of the 12{" "}
-          <code>wp_*</code> tables, up to 10 MB. The importer parses data only — it never executes imported code.
+          <code>wp_*</code> tables, up to 50 MB. The importer parses data only — it never executes imported code.
           WordPress password hashes are not portable, so every imported user gets a forced password reset and cannot
           sign in until an administrator resets their password. PHP-serialized values become JSON; serialized objects
           are refused and recorded as failed.
@@ -71,7 +71,7 @@ export function ImportPage(): React.ReactElement {
             </select>
           </div>
           <div className="field">
-            <label htmlFor="import-file">File (max 10 MB)</label>
+            <label htmlFor="import-file">File (max 50 MB)</label>
             <input
               id="import-file"
               type="file"

@@ -314,6 +314,24 @@ export function ThemeEditorPage(): React.ReactElement {
     };
   };
 
+  /** M11 auto-conversion record stored on the theme report (block + classic). */
+  const conversionSummary = (
+    t: ThemeRecord,
+  ): { converted: number; partial: number; blocked: number; settingsCarried: number } | null => {
+    if (!isRecord(t.report)) return null;
+    const c = t.report.conversion;
+    if (!isRecord(c)) return null;
+    if (typeof c.converted !== "number") return null;
+    const settings = isRecord(c.settings) ? c.settings : null;
+    const carried = settings !== null && Array.isArray(settings.carriedOver) ? settings.carriedOver.length : 0;
+    return {
+      converted: c.converted as number,
+      partial: typeof c.partial === "number" ? (c.partial as number) : 0,
+      blocked: typeof c.blocked === "number" ? (c.blocked as number) : 0,
+      settingsCarried: carried,
+    };
+  };
+
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Themes</h2>
@@ -327,7 +345,7 @@ export function ThemeEditorPage(): React.ReactElement {
       <div className="card" style={{ marginBottom: 16 }}>
         <h3 style={{ marginTop: 0 }}>Import a theme</h3>
         <p className="hint">
-          Upload a theme .zip (max 5 MB). Block themes need <code>style.css</code> with a theme header plus{" "}
+          Upload a theme .zip (max 50 MB). Block themes need <code>style.css</code> with a theme header plus{" "}
           <code>theme.json</code>; classic themes are imported for their stylesheet plus a per-file conversion report —
           their PHP templates are analysed, never executed or fully converted.
         </p>
@@ -350,6 +368,7 @@ export function ThemeEditorPage(): React.ReactElement {
           <h3 style={{ marginTop: 0 }}>Installed themes</h3>
           {themes.map((t) => {
             const report = classicReport(t);
+            const conversion = conversionSummary(t);
             return (
               <div key={t.slug} style={{ borderBottom: "1px solid var(--border)", padding: "10px 0" }}>
                 <strong>{t.name}</strong> <span className="muted">v{t.version}</span>{" "}
@@ -362,6 +381,13 @@ export function ThemeEditorPage(): React.ReactElement {
                   <p className="hint" style={{ margin: "4px 0" }}>
                     Classic import — PHP files analysed: {report.convertible} convertible · {report.partial} partial ·{" "}
                     {report.blocked} blocked. Only the stylesheet is used on the site.
+                  </p>
+                )}
+                {conversion !== null && (
+                  <p className="hint" style={{ margin: "4px 0" }}>
+                    Auto-convert on import — PHP: {conversion.converted} converted · {conversion.partial} partial ·{" "}
+                    {conversion.blocked} blocked; settings carried over: {conversion.settingsCarried}. Converted code
+                    is stored, never executed.
                   </p>
                 )}
                 <div style={{ marginTop: 6, display: "flex", gap: 8 }}>

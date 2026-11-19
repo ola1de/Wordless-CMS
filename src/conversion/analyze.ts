@@ -19,6 +19,13 @@ export interface UnconvertibleFeature {
   line: number;
 }
 
+export interface OptionDefault {
+  key: string;
+  /** Literal scalar default from the get_option() call (string/number/bool only). */
+  defaultValue: string | number | boolean;
+  file: string;
+}
+
 export interface FileAnalysis {
   file: string;
   lines: number;
@@ -30,6 +37,8 @@ export interface FileAnalysis {
   hooks: { tag: string; kind: "action" | "filter" }[];
   wpCalls: string[];
   optionKeys: string[];
+  /** Literal get_option()/add_option() defaults (M11 settings migration). */
+  optionDefaults: OptionDefault[];
   httpCalls: string[];
   features: string[];
   unconvertible: UnconvertibleFeature[];
@@ -63,6 +72,15 @@ function literalString(node: ExprNode | undefined): string | null {
   if (node !== undefined && node.kind === "literal" && node.literalKind === "string") {
     return String(node.value);
   }
+  return null;
+}
+
+/** A literal scalar (string/number/bool) — used for option defaults. */
+function literalScalar(node: ExprNode | undefined): string | number | boolean | null {
+  if (node === undefined || node.kind !== "literal") return null;
+  if (node.literalKind === "string" && typeof node.value === "string") return node.value;
+  if (node.literalKind === "number" && typeof node.value === "number") return node.value;
+  if (node.literalKind === "bool" && typeof node.value === "boolean") return node.value;
   return null;
 }
 
@@ -146,6 +164,7 @@ export function analyzePhp(source: string, filename: string): FileAnalysis {
   const hooks: { tag: string; kind: "action" | "filter" }[] = [];
   const wpCalls = new Set<string>();
   const optionKeys = new Set<string>();
+  const optionDefaults: OptionDefault[] = [];
   const httpCalls = new Set<string>();
   const features = new Set<string>();
   const unconvertible: UnconvertibleFeature[] = [];
@@ -277,7 +296,15 @@ export function analyzePhp(source: string, filename: string): FileAnalysis {
         }
         if (OPTION_CALLS.has(lower)) {
           const key = literalString(node.args[0]);
-          if (key !== null) optionKeys.add(key);
+          if (key !== null) {
+            optionKeys.add(key);
+            // M11: a literal default travels with the key so the settings
+            // migration can carry it over as a Wordless option.
+            const fallback = literalScalar(node.args[1]);
+            if (fallback !== null) {
+              optionDefaults.push({ key, defaultValue: fallback, file: filename });
+            }
+          }
         }
         if (HTTP_CALLS.has(lower)) httpCalls.add(lower);
         if (lower.startsWith("wp_") || lower.startsWith("get_") || lower.startsWith("update_") || lower.startsWith("delete_") || lower.startsWith("add_") || lower === "__" || lower === "_e" || lower.startsWith("esc_") || lower === "apply_filters" || lower === "do_action") {
@@ -352,6 +379,7 @@ export function analyzePhp(source: string, filename: string): FileAnalysis {
     hooks,
     wpCalls: [...wpCalls].sort(),
     optionKeys: [...optionKeys].sort(),
+    optionDefaults,
     httpCalls: [...httpCalls].sort(),
     features: [...features].sort(),
     unconvertible,

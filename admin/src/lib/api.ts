@@ -19,6 +19,8 @@ import type {
   ConversionJob,
   ConversionJobList,
   ExtensionRecord,
+  FileEntry,
+  FileListResult,
   IntegrationInfo,
   MailLogList,
   MarketplaceExtension,
@@ -29,6 +31,7 @@ import type {
   Order,
   OrderList,
   PaymentProviderInfo,
+  PluginCompatibilityReport,
   PostSeo,
   PreviewToken,
   Product,
@@ -379,6 +382,11 @@ export const api = {
   listMarketplace(): Promise<MarketplaceExtension[]> {
     return request<MarketplaceExtension[]>("/api/marketplace");
   },
+  getMarketplaceReport(slug: string): Promise<{ slug: string; report: PluginCompatibilityReport | null }> {
+    return request<{ slug: string; report: PluginCompatibilityReport | null }>(
+      `/api/marketplace/${encodeURIComponent(slug)}/report`,
+    );
+  },
   async installMarketplaceZip(file: File): Promise<MarketplaceExtension> {
     const form = new FormData();
     form.append("file", file);
@@ -391,5 +399,27 @@ export const api = {
   },
   setMarketplaceStatus(slug: string, status: "activate" | "deactivate"): Promise<MarketplaceExtension> {
     return request<MarketplaceExtension>(`/api/marketplace/${encodeURIComponent(slug)}/${status}`, { method: "POST" });
+  },
+  /* Milestone 11 — file manager. */
+  listFiles(prefix = ""): Promise<FileListResult> {
+    const q = prefix === "" ? "" : `?prefix=${encodeURIComponent(prefix)}`;
+    return request<FileListResult>(`/api/files${q}`);
+  },
+  async uploadFile(file: File, prefix = ""): Promise<FileEntry> {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("prefix", prefix);
+    const res = await fetch("/api/files/upload", { method: "POST", credentials: "same-origin", body: form });
+    const body = (await res.json()) as Envelope<FileEntry>;
+    if (!res.ok || !body.ok) {
+      throw new ApiError(res.status, body.error?.message ?? `Upload failed (${res.status}).`);
+    }
+    return body.data as FileEntry;
+  },
+  renameFile(key: string, newName: string): Promise<FileEntry> {
+    return request<FileEntry>("/api/files/rename", { method: "POST", body: JSON.stringify({ key, newName }) });
+  },
+  deleteFile(key: string): Promise<{ deleted: boolean }> {
+    return request<{ deleted: boolean }>("/api/files/delete", { method: "POST", body: JSON.stringify({ key }) });
   },
 };

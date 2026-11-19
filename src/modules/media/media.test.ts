@@ -28,7 +28,7 @@ describe("media upload validation", () => {
   });
 
   it("rejects oversized and empty files", () => {
-    expect(() => validateUpload("image/png", 10 * 1024 * 1024 + 1)).toThrow(/too large/);
+    expect(() => validateUpload("image/png", 50 * 1024 * 1024 + 1)).toThrow(/too large/);
     expect(() => validateUpload("image/png", 0)).toThrow(/empty/);
   });
 });

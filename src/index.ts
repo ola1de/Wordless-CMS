@@ -55,6 +55,7 @@ import { rssFeed, siteUrl } from "./modules/feeds/service";
 import { getRobotsTxt, setRobotsTxt } from "./modules/seo/robots";
 import { sitemapXml } from "./modules/seo/sitemap";
 import { getPostSeo, setPostSeo } from "./modules/seo/meta";
+import { hasElementorData } from "./modules/elementor/elementor";
 import { analyzePostSeo } from "./modules/seo/analyze";
 import { createRedirect, deleteRedirect, listRedirects, updateRedirect } from "./modules/seo/redirects";
 import { deleteNotFound, listNotFound, logNotFound } from "./modules/seo/notfound";
@@ -67,6 +68,7 @@ import { listMailLog, sendMail } from "./modules/integrations/email";
 import { getAnalyticsStatus } from "./modules/integrations/analytics";
 import { cloudflareBindingStatus } from "./modules/integrations/cloudflare";
 import {
+  getMarketplaceExtensionReport,
   installExtensionFromZip,
   listMarketplaceExtensions,
   setMarketplaceExtensionStatus,
@@ -107,6 +109,7 @@ import {
   uploadMedia,
 } from "./modules/media/service";
 import { R2MediaStorage } from "./modules/media/storage";
+import { deleteFile, downloadFile, listFiles, renameFile, uploadFile } from "./modules/files/service";
 import { getOption } from "./modules/options/service";
 import {
   getPermalinkStructure,
@@ -211,7 +214,7 @@ import {
 } from "./modules/backup/service";
 import { runImportJob } from "./modules/importer/service";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -420,7 +423,8 @@ function buildRouter(): Router {
       throw new WordlessError("unauthorized", 401, "Authentication required to view this post.");
     }
     // M7: the post detail payload carries its SEO fields.
-    return jsonOk({ ...post, seo: await getPostSeo(db, post.id) });
+    // M11: and whether it carries Elementor data (editor notice).
+    return jsonOk({ ...post, seo: await getPostSeo(db, post.id), hasElementorData: await hasElementorData(db, post.id) });
   });
 
   // --------------------------------------------------------------- revisions
@@ -906,6 +910,81 @@ function buildRouter(): Router {
       return jsonOk({ deleted });
     },
     { capability: "upload_files" },
+  );
+
+  // ------------------------------------------------------------ file manager (M11)
+  // Admin-only file browser over the R2 bucket: folder navigation by
+  // prefix, upload/download/rename/delete. No shell access, no in-place
+  // editing; managed prefixes (extensions/, themes/, backups/,
+  // imports/) are read-only here. All routes need manage_options.
+  router.get(
+    "/api/files",
+    async ({ url, env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await listFiles(db, new R2MediaStorage(env.MEDIA), url.searchParams.get("prefix") ?? ""));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/files/upload",
+    async ({ request, env, user }) => {
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        throw new WordlessError("bad_request", 400, 'Upload requires a multipart "file" field.');
+      }
+      const prefix = typeof form.get("prefix") === "string" ? (form.get("prefix") as string) : "";
+      const entry = await uploadFile(new R2MediaStorage(env.MEDIA), prefix, {
+        filename: file.name,
+        mimeType: file.type,
+        data: new Uint8Array(await file.arrayBuffer()),
+      });
+      await log(adaptD1(env.DB), user, "files.upload", "file", 0);
+      return jsonOk(entry, 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/files/download",
+    async ({ url, env }) => {
+      const key = url.searchParams.get("key") ?? "";
+      const found = await downloadFile(new R2MediaStorage(env.MEDIA), key);
+      return new Response(found.data as unknown as BodyInit, {
+        status: 200,
+        headers: {
+          "Content-Type": found.contentType,
+          "Content-Disposition": `attachment; filename="${found.name.replace(/"/g, "")}"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/files/rename",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const entry = await renameFile(db, new R2MediaStorage(env.MEDIA), String(body.key ?? ""), String(body.newName ?? ""));
+      await log(db, user, "files.rename", "file", 0);
+      return jsonOk(entry);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/files/delete",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const result = await deleteFile(db, new R2MediaStorage(env.MEDIA), String(body.key ?? ""));
+      await log(db, user, "files.delete", "file", 0);
+      return jsonOk(result);
+    },
+    { capability: "manage_options" },
   );
 
   // Serve a stored object: GET /media/<object-key> (flat keys, no slashes).
@@ -1532,6 +1611,19 @@ function buildRouter(): Router {
     { capability: "install_plugins" },
   );
 
+  // M11: the stored PHP-analyser report for one installed extension.
+  // Null means the extension was never analysed (installed before M11,
+  // or a ZIP with no PHP files). Never claims a plugin "works".
+  router.get(
+    "/api/marketplace/:slug/report",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const report = await getMarketplaceExtensionReport(db, params.slug ?? "");
+      return jsonOk({ slug: params.slug ?? "", report });
+    },
+    { capability: "install_plugins" },
+  );
+
   // ------------------------------------------------------------ commerce (M8)
   // Products: public list/detail show published products only; drafts
   // and management need manage_options.
@@ -2126,9 +2218,9 @@ function buildRouter(): Router {
   // ------------------------------------------------------------ import (M9)
   // WXR and mysqldump imports run as wl_jobs jobs. The uploaded file is
   // stored in R2 under imports/ first (never in D1); the job payload
-  // holds its key. 10 MB cap, admin-only. The file is data only — the
+  // holds its key. 50 MB cap, admin-only. The file is data only — the
   // importer parses XML/SQL, it never executes imported code.
-  const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+  const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 
   async function startImportJob(
     request: Request,
@@ -2147,7 +2239,7 @@ function buildRouter(): Router {
       throw new WordlessError("bad_request", 400, 'Import requires a multipart "file" field.');
     }
     if (file.size > MAX_IMPORT_BYTES) {
-      throw new WordlessError("bad_request", 400, "Import file is too large (10 MB maximum).");
+      throw new WordlessError("bad_request", 400, "Import file is too large (50 MB maximum).");
     }
     const jobId = crypto.randomUUID();
     const r2Key = `imports/${jobId}-${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;

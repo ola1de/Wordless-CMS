@@ -18,8 +18,8 @@ test fixtures linked for a trial run.*
 
 | Format | Endpoint | Limit | Parser |
 |---|---|---|---|
-| WXR (XML) | `POST /api/import/wxr` | 10 MB multipart upload | `fast-xml-parser` (a real XML parser — never regex) |
-| SQL dump | `POST /api/import/sql` | 10 MB multipart upload | hand-written mysqldump parser (`sql-parser.ts`) |
+| WXR (XML) | `POST /api/import/wxr` | 50 MB multipart upload | `fast-xml-parser` (a real XML parser — never regex) |
+| SQL dump | `POST /api/import/sql` | 50 MB multipart upload | hand-written mysqldump parser (`sql-parser.ts`) |
 
 Both endpoints store the uploaded file in R2 under
 `imports/<jobId>-<filename>`, create a `wl_jobs` job (`import_wxr`

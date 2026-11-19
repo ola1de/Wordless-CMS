@@ -3,13 +3,13 @@
  * R2MediaStorage so media tests run with zero infrastructure.
  * NEVER a live bucket in tests.
  */
-import type { MediaStorage } from "../modules/media/storage";
+import type { MediaStorage, StorageObjectInfo } from "../modules/media/storage";
 
 export class InMemoryMediaStorage implements MediaStorage {
-  private readonly objects = new Map<string, { data: Uint8Array; contentType: string }>();
+  private readonly objects = new Map<string, { data: Uint8Array; contentType: string; uploaded: Date }>();
 
   async put(key: string, data: Uint8Array, contentType: string): Promise<{ key: string; size: number }> {
-    this.objects.set(key, { data: new Uint8Array(data), contentType });
+    this.objects.set(key, { data: new Uint8Array(data), contentType, uploaded: new Date() });
     return { key, size: data.byteLength };
   }
 
@@ -28,6 +28,13 @@ export class InMemoryMediaStorage implements MediaStorage {
 
   async list(prefix: string): Promise<string[]> {
     return [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+  }
+
+  async listObjects(prefix: string): Promise<StorageObjectInfo[]> {
+    return [...this.objects.entries()]
+      .filter(([k]) => k.startsWith(prefix))
+      .map(([key, obj]) => ({ key, size: obj.data.byteLength, uploaded: obj.uploaded }))
+      .sort((a, b) => a.key.localeCompare(b.key));
   }
 
   /** Test helper: how many objects are stored. */

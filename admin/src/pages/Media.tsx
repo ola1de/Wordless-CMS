@@ -105,7 +105,7 @@ export function MediaPage(): React.ReactElement {
         </select>
         <span className="spacer" />
         <label className="muted" htmlFor="media-upload">
-          Upload (max 10 MB; jpeg, png, gif, webp, avif, svg, pdf)
+          Upload (max 50 MB; jpeg, png, gif, webp, avif, svg, pdf)
         </label>
         <input
           id="media-upload"

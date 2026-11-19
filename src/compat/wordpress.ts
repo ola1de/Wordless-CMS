@@ -432,7 +432,7 @@ export const INTEGRATIONS_COMPAT: CompatEntry[] = [
   { name: "wl_integrations_analytics", level: "partial", description: "GET /api/integrations/analytics/status — GA4/Plausible configuration (provider id + measurement id, non-secret). The snippet is injected only when configured. No traffic numbers are ever fabricated." },
   { name: "wl_integrations_social", level: "partial", description: "Share links (X/Facebook/WhatsApp/Telegram) on public post and product pages — plain links, no API calls, no fake counts." },
   { name: "wl_integrations_cloudflare", level: "partial", description: "GET /api/integrations/cloudflare — read-only display of the bindings actually present in this environment (DB, MEDIA, CONFIG, ASSETS, AI). No IDs are invented." },
-  { name: "wl_integrations_marketplace", level: "partial", description: "GET /api/marketplace + POST /api/marketplace/install (ZIP upload, wordless.json manifest, ≤2 MB / ≤100 files) + activate/deactivate. Local-ZIP skeleton only — no remote directory, and installed code is never executed by the install." },
+  { name: "wl_integrations_marketplace", level: "partial", description: "GET /api/marketplace + POST /api/marketplace/install (ZIP upload, wordless.json manifest, ≤50 MB / ≤10,000 files) + activate/deactivate + GET /api/marketplace/:slug/report (compatibility + auto-conversion report). Local-ZIP only — no remote directory, and installed code is never executed." },
 ];
 
 /**
@@ -447,7 +447,7 @@ export const SECURITY_COMPAT: CompatEntry[] = [
   { name: "wl_security_lockout", level: "partial", description: "POST /api/auth/login is guarded: 5 failed attempts in 15 minutes lock a login name/IP for 15 minutes (doubling on consecutive lockouts, capped at 60); a successful login clears the counter. Thresholds are options (wl_security_max_attempts / wl_security_window_minutes / wl_security_lockout_minutes)." },
   { name: "wl_security_2fa", level: "partial", description: "POST /api/auth/2fa/setup|confirm|disable + GET /api/auth/2fa/status — TOTP (RFC 6238, HMAC-SHA1, 30 s steps, ±1 step skew) with 8 one-time hashed recovery codes. The secret is stored only after a valid code confirms setup; login accepts an optional totp field." },
   { name: "wl_security_sessions", level: "partial", description: "GET /api/auth/sessions + POST /api/auth/sessions/revoke-all — idle timeout (wl_session_idle_hours, default 24 h) enforced on verify; sessions are listed without token values." },
-  { name: "wl_security_uploads", level: "partial", description: "Uploads keep the M3 allowlist (jpeg/png/gif/webp/avif/svg/pdf, 10 MB) and add magic-byte sniffing — a PHP file renamed to .jpg is rejected; SVGs are checked for scripts and javascript: URLs." },
+  { name: "wl_security_uploads", level: "partial", description: "Uploads keep the M3 allowlist (jpeg/png/gif/webp/avif/svg/pdf, 50 MB) and add magic-byte sniffing — a PHP file renamed to .jpg is rejected; SVGs are checked for scripts and javascript: URLs." },
   { name: "wl_security_overview", level: "partial", description: "GET /api/security/overview — measured posture: headers policy, lockout config + locked keys, 2FA per admin, active sessions, recent failed logins, and whether a user with the default login name \"admin\" exists (login name only — passwords are never tested)." },
   { name: "wl_security_agents", level: "partial", description: "The M6 security-scanner agent now runs the real checks above and the performance-analyst measures real D1/R2 numbers; the backup-advisor reports the real backup registry and the migration-assistant points at the real M9 importer." },
 ];
@@ -465,9 +465,24 @@ export const BACKUP_COMPAT: CompatEntry[] = [
 ];
 
 export const IMPORT_COMPAT: CompatEntry[] = [
-  { name: "wl_import_wxr", level: "partial", description: "POST /api/import/wxr (admin, multipart ≤10 MB, wl_jobs job) — WordPress eXtended RSS via a real XML parser: authors (forced password reset), categories/tags, posts/pages (block content verbatim), comments, attachments (URL fetch → R2; failed fetches recorded per item). Per-item report with imported/skipped/failed counts." },
-  { name: "wl_import_sql", level: "partial", description: "POST /api/import/sql (admin, ≤10 MB, wl_jobs job) — mysqldump parsing for the 12 wp_* tables only (other tables reported as ignored). PHP-serialized values become JSON via the safe unserializer; serialized objects are refused and recorded. Original IDs are kept when free; revisions are skipped." },
+  { name: "wl_import_wxr", level: "partial", description: "POST /api/import/wxr (admin, multipart ≤50 MB, wl_jobs job) — WordPress eXtended RSS via a real XML parser: authors (forced password reset), categories/tags, posts/pages (block content verbatim), comments, attachments (URL fetch → R2; failed fetches recorded per item). Per-item report with imported/skipped/failed counts." },
+  { name: "wl_import_sql", level: "partial", description: "POST /api/import/sql (admin, ≤50 MB, wl_jobs job) — mysqldump parsing for the 12 wp_* tables only (other tables reported as ignored). PHP-serialized values become JSON via the safe unserializer; serialized objects are refused and recorded. Original IDs are kept when free; revisions are skipped." },
   { name: "wl_import_fixtures", level: "partial", description: "test/fixtures/wordpress/ carries a synthetic WXR export + SQL dump (posts/pages/terms/comments/users/options, serialized values, a refused object payload, a revision, a non-wp_* table) that the importer is proven against in tests; the admin Import page links to both files." },
+];
+
+/**
+ * Milestone 11 surface — auto-convert, Elementor rendering, file manager.
+ * "partial" means the endpoint exists and works with the documented M11
+ * limits: converted code is stored, never executed; the Elementor editor
+ * is not included; 50 MB is the configured upload cap but uploads near
+ * the cap can still be slow or fail on the Cloudflare free tier.
+ */
+export const M11_COMPAT: CompatEntry[] = [
+  { name: "wl_m11_limits", level: "partial", description: "Upload caps raised to 50 MB / 10,000 files: theme ZIPs (was 200 files / 5 MB), marketplace ZIPs (was 100 files / 2 MB), media uploads (was 10 MB), WXR/SQL imports (was 10 MB). Near-cap uploads can still be slow or fail on the Cloudflare free tier (128 MB Worker memory, request buffering); chunked/resumable upload is a future improvement." },
+  { name: "wl_m11_compat_report", level: "partial", description: "GET /api/marketplace/:slug/report — per-plugin compatibility report stored in wl_extensions.report_json: PHP files analysed (max 2,000, 1 MB per file), convertible / partial / blocked / unparsed counts, top blocking reasons with file paths, per-file verdicts (capped at 500). Static analysis only — never a guarantee the plugin works; a plugin is never labelled as working while its report shows partial/blocked files." },
+  { name: "wl_m11_auto_convert", level: "partial", description: "Theme imports (block + classic) and marketplace installs automatically run the M4 converter over PHP files (max 500 files, 1 MB per file) and store the generated TypeScript in R2 under <prefix>/converted/<path>.ts — stored, never executed. Literal get_option() defaults are carried over as Wordless options (existing values never overwritten); theme.json settings are reported as applied or skipped with a reason. Per-file record (converted / partial / blocked + reason) and settings report are stored with the theme/plugin and shown in admin." },
+  { name: "wl_m11_elementor", level: "partial", description: "Posts carrying _elementor_data postmeta render their Elementor layout on the public site (sections → columns → widgets) for heading, text-editor, image, button, spacer, divider, video, icon-list, image-box and google-maps. Unknown widgets render nothing and are collected as unsupported; icon glyphs are not rendered (no icon font bundled). This renders Elementor *content* only — the Elementor drag-and-drop editor is NOT included; pages are edited in Wordless's own block editor." },
+  { name: "wl_m11_files", level: "partial", description: "GET /api/files (+ ?prefix=), POST /api/files/upload, GET /api/files/download, POST /api/files/rename, POST /api/files/delete — admin file manager over the R2 bucket (manage_options on every route). Folder navigation by prefix, uploads ≤50 MB with the media MIME allowlist + magic-byte sniffing, no in-place editing, no shell access; extensions/, themes/, backups/ and imports/ are read-only here; path traversal is rejected." },
 ];
 
 export type { Role };

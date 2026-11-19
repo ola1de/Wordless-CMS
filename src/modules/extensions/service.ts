@@ -12,6 +12,7 @@ import { execRun, nowIso, queryAll, queryOne } from "../../db";
 import type { Db } from "../../db";
 import { badRequest, notFound } from "../../kernel/errors";
 import { requireString } from "../../kernel/validate";
+import { parseCompatibilityReport, type PluginCompatibilityReport } from "../integrations/compat-report";
 
 export interface ExtensionRecord {
   slug: string;
@@ -20,6 +21,8 @@ export interface ExtensionRecord {
   version: string;
   status: string;
   source: string | null;
+  /** M11 compatibility report, or null when the extension was never analysed. */
+  report: PluginCompatibilityReport | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +34,8 @@ export interface InstallExtensionInput {
   kind?: string;
   source?: string;
   status?: "active" | "inactive";
+  /** M11: report from the PHP analyser (stored as JSON). */
+  report?: PluginCompatibilityReport | null;
 }
 
 interface ExtensionRow {
@@ -40,6 +45,7 @@ interface ExtensionRow {
   version: string;
   status: string;
   source: string | null;
+  report_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +58,7 @@ function rowToRecord(row: ExtensionRow): ExtensionRecord {
     version: row.version,
     status: row.status,
     source: row.source,
+    report: parseCompatibilityReport(row.report_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -67,14 +74,17 @@ export async function installExtension(db: Db, input: InstallExtensionInput): Pr
   const kind = input.kind ?? "plugin";
   const status = input.status ?? "inactive";
   const now = nowIso();
+  const reportJson = input.report !== undefined && input.report !== null ? JSON.stringify(input.report) : null;
   await execRun(
     db,
-    `INSERT INTO wl_extensions (id, slug, name, kind, version, status, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO wl_extensions (id, slug, name, kind, version, status, source, report_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(slug) DO UPDATE SET
        name = excluded.name, kind = excluded.kind, version = excluded.version,
-       status = excluded.status, source = excluded.source, updated_at = excluded.updated_at`,
-    [slug, slug, name, kind, version, status, input.source ?? null, now, now],
+       status = excluded.status, source = excluded.source,
+       report_json = COALESCE(excluded.report_json, wl_extensions.report_json),
+       updated_at = excluded.updated_at`,
+    [slug, slug, name, kind, version, status, input.source ?? null, reportJson, now, now],
   );
   const row = await queryOne<ExtensionRow>(db, "SELECT * FROM wl_extensions WHERE slug = ? LIMIT 1", [slug]);
   if (row === null) throw new Error("Extension was not installed.");

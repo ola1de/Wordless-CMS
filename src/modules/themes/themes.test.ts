@@ -389,7 +389,24 @@ describe("default theme bundle", () => {
 describe("theme ZIP import", () => {
   it("rejects a non-ZIP and an oversized ZIP", () => {
     expect(() => extractThemeZip(new TextEncoder().encode("not a zip"))).toThrow();
-    expect(() => extractThemeZip(new Uint8Array(6 * 1024 * 1024))).toThrow(/5 MB/);
+    expect(() => extractThemeZip(new Uint8Array(51 * 1024 * 1024))).toThrow(/50 MB/);
+  });
+
+  it("accepts a ZIP with 201 files (M11: the old 200-file cap is gone)", () => {
+    const input: Record<string, Uint8Array> = { "style.css": new TextEncoder().encode("/* Theme Name: Big */") };
+    for (let i = 0; i < 200; i++) {
+      input[`part-${i}.html`] = new TextEncoder().encode("<!-- wp:paragraph --><p>x</p><!-- /wp:paragraph -->");
+    }
+    const out = extractThemeZip(zipSync(input));
+    expect(out.files.size).toBe(201);
+  });
+
+  it("rejects a ZIP with more than 10000 files", () => {
+    const input: Record<string, Uint8Array> = { "style.css": new TextEncoder().encode("/* Theme Name: Huge */") };
+    for (let i = 0; i < 10000; i++) {
+      input[`part-${i}.html`] = new TextEncoder().encode("x");
+    }
+    expect(() => extractThemeZip(zipSync(input))).toThrow(/limit is 10000/);
   });
 
   it("rejects a path-traversal entry", () => {
@@ -442,6 +459,52 @@ describe("theme ZIP import", () => {
       const storage = new InMemoryMediaStorage();
       const zip = zipOf({ "style.css": BLOCK_ZIP_STYLE });
       await expect(importTheme(tdb.db, storage, "bad.zip", zip)).rejects.toThrow(/theme\.json/);
+    } finally {
+      tdb.close();
+    }
+  });
+
+  it("auto-converts the theme PHP on import and carries settings over (M11)", async () => {
+    const tdb = createTestDb();
+    try {
+      const storage = new InMemoryMediaStorage();
+      const zip = zipOf({
+        "test-block/style.css": BLOCK_ZIP_STYLE,
+        "test-block/theme.json": JSON.stringify(MINIMAL_V3),
+        "test-block/templates/index.html":
+          '<!-- wp:template-part {"slug":"header"} /-->\n<!-- wp:query --><!-- wp:post-template --><!-- wp:post-title {"level":2,"isLink":true} /--><!-- /wp:post-template --><!-- /wp:query -->',
+        "test-block/parts/header.html": "<!-- wp:site-title /-->",
+        "test-block/parts/footer.html": "<!-- wp:paragraph --><p>Footer</p><!-- /wp:paragraph -->",
+        "test-block/functions.php":
+          "<?php\nif (!defined('ABSPATH')) exit;\nfunction test_block_setup() {\n  add_action('after_setup_theme', 'test_block_setup');\n  return get_option('test_block_mode', 'standard');\n}\n",
+      });
+      const imported = await importTheme(tdb.db, storage, "test-block.zip", zip);
+      const conversion = (imported.theme.report as Record<string, unknown> | null)?.conversion as
+        | Record<string, unknown>
+        | undefined;
+      expect(conversion).toBeDefined();
+      expect(conversion?.converted).toBe(1);
+      expect(conversion?.partial).toBe(0);
+      expect(conversion?.blocked).toBe(0);
+      const files = (conversion?.files as Array<Record<string, unknown>>) ?? [];
+      expect(files[0]?.generatedPath).toBe("converted/functions.ts");
+      expect(await storage.exists("themes/test-block/converted/functions.ts")).toBe(true);
+      const settings = conversion?.settings as
+        | { carriedOver: Array<Record<string, unknown>>; skipped: Array<Record<string, unknown>> }
+        | undefined;
+      const carriedKeys = (settings?.carriedOver ?? []).map((e) => e.key as string);
+      expect(carriedKeys).toContain("test_block_mode");
+      expect(carriedKeys).toContain("theme.json color palette");
+      expect(carriedKeys).toContain("theme.json font sizes");
+      expect(carriedKeys).toContain("theme.json layout widths");
+      const { getOption } = await import("../options/service");
+      expect(await getOption(tdb.db, "test_block_mode", null)).toBe("standard");
+      // The look still carries over: activate and the theme.json presets
+      // are in the served stylesheet.
+      await activateTheme(tdb.db, "test-block");
+      const loaded = await loadActiveTheme(tdb.db, storage);
+      expect(loaded.record.slug).toBe("test-block");
+      expect(loaded.stylesheet).toContain("--wp--preset--color--primary: #2563EB;");
     } finally {
       tdb.close();
     }
