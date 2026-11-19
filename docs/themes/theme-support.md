@@ -8,6 +8,9 @@ install and is active until another theme is activated. If no theme is
 active, the M2 built-in rendering is used as a fallback (see
 "Fallback" below).
 
+![Public home page](../screenshots/public-home.png)
+*The public home page under the Wordless default theme.*
+
 ## theme.json support matrix
 
 `theme.json` versions 1–3 are parsed and validated
@@ -41,8 +44,9 @@ clear error listing the offending paths (e.g.
 
 ✓ = implemented. ⚠ = parsed and validated, but the effect is recorded
 in the import report's `unsupported` list rather than applied. `patterns`
-are recorded in the parsed theme.json but never executed (patterns are
- inert content, not code).
+in theme.json are recorded (the list names reusable fragments); the
+fragments themselves render from the theme's `patterns/<name>.php`
+files since 1.0.0 (M10) — see "Block patterns" below.
 
 Version handling: the `version` field must be 1, 2 or 3; anything else
 fails validation. A missing `version` defaults to 1 (WordPress behaviour).
@@ -97,10 +101,33 @@ Supported template blocks: `group`, `columns`, `column`, `query`,
 `post-template`, `post-title`, `post-content`, `post-excerpt`,
 `post-date`, `post-terms`, `query-title`, `query-pagination`, `search`,
 `navigation`, `site-title`, `site-tagline`, `paragraph`, `heading`,
-`list`, `quote`, `image`, `code`, `separator`. `pattern` blocks are
-recorded, not rendered. `post-featured-image` renders nothing (no
-featured images yet — Phase 7). A missing template part is reported as a
+`list`, `quote`, `image`, `code`, `separator`. `pattern` blocks render
+the theme's `patterns/<name>.php` file (since 1.0.0 — see "Block
+patterns" below). `post-featured-image` renders nothing (no
+featured images yet). A missing template part is reported as a
 warning, not a failure.
+
+## Block patterns (1.0.0)
+
+A `wp:pattern {"slug":"<theme>/<name>"}` block renders the theme's
+`patterns/<name>.php` file: the leading PHP header comment (Title/Slug)
+is stripped and the block HTML is rendered through the template
+renderer, so query-loop patterns, nested patterns and patterns inside
+template parts all work. Inline PHP inside a pattern file is evaluated
+by an allowlisted evaluator (`src/modules/themes/pattern-php.ts`) that
+handles the twelve i18n/escaping calls real themes use (`__`, `_x`,
+`_e`, `esc_html__/_x/_e`, `esc_attr__/_x/_e`, `esc_url`,
+`get_template_directory_uri`, `printf` with `%s`, `wp_kses_post`) with
+string literals only. Anything else — variables, unknown functions,
+includes, `eval`, control flow — refuses the whole pattern with a
+warning; no PHP is ever executed. Nesting is bounded (depth 5, shared
+with template parts) and a self-referencing pattern renders once
+(cycle guard). One honest limit: `get_template_directory_uri()`
+returns an empty string (theme files live in R2 with no public asset
+URL yet), so image `src` attributes built from it are empty and the
+renderer records one warning per page render. Verified against the
+real Twenty Twenty-Five theme: its `home.html` (header/footer parts +
+`template-query-loop` pattern) renders post titles and excerpts.
 
 ## Import guide
 

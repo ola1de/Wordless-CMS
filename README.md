@@ -10,7 +10,8 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 9 — security + performance + backup + WordPress importer (built, in verification).** The kernel, D1
+> **Status: Version 1.0.0 — production readiness (Milestone 10, built and
+> verified locally, 417 tests passing).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
@@ -18,7 +19,9 @@ One platform. One intelligent command centre. Complete website management.
 > emitter, safety sandbox, async conversion jobs, Hello Dolly end-to-end,
 > Akismet static analysis), the theme system (theme.json engine,
 > block-theme rendering, ZIP import, classic-theme analysis, customizer
-> with preview + variations), the AI operating system (provider
+> with preview + variations, and — since 1.0.0 — block-pattern rendering
+> from `patterns/*.php` files, verified against the real Twenty
+> Twenty-Five theme), the AI operating system (provider
 > abstraction with **Workers AI as the default provider**, orchestrator
 > with three enforced operating modes, 15 specialist agents, human
 > approvals, website memory, and the AI command centre), the content
@@ -31,7 +34,7 @@ One platform. One intelligent command centre. Complete website management.
 > plus a test-mode mock, products / cart / checkout / orders with
 > integer minor-unit money, the commerce-assistant wired to real store
 > data, social share links, analytics config, and the marketplace
-> skeleton), and now security hardening + performance (security headers
+> skeleton), security hardening + performance (security headers
 > on every response, login lockout, TOTP two-factor, session idle
 > timeout, magic-byte upload sniffing, public-page cache rules with
 > purge-on-publish, Cloudflare Images derivatives when bound, a
@@ -39,9 +42,66 @@ One platform. One intelligent command centre. Complete website management.
 > with per-file SHA-256 checksums, verification, typed-confirmation
 > restore) and the WordPress importer (WXR + mysqldump, safe PHP
 > unserializing, forced password reset for imported users) are built
-> and tested. Production readiness is **not built yet** — see
-> [What M9 is not](#what-milestone-9-is-not) below. Nothing unfinished is
-> presented as done.
+> and tested, and production readiness is now built too: the
+> first-administrator seed command, staging/production environments
+> with separate D1 databases and R2 buckets, deploy scripts with
+> pre-deploy checks, and release management (CHANGELOG + tagging and
+> rollback procedures). What is still NOT verified or NOT done is listed
+> in [What Milestone 10 is not](#what-milestone-10-is-not) below.
+> Nothing unfinished is presented as done.
+
+## Screenshots
+
+Real screenshots of the running app (local dev, seeded demo content —
+see `~/workspace/wordless/shots-m10.sh` for how they were taken). All
+captured at 1440×900.
+
+**Public site**
+
+![Public home page](docs/screenshots/public-home.png)
+*The public home page — two published posts under the Wordless default theme.*
+
+![Single post page](docs/screenshots/public-post.png)
+*One post: heading, paragraph and image blocks, rendered from stored
+block content.*
+
+![Shop page](docs/screenshots/public-shop.png)
+*The shop — products with real minor-unit prices and plain-text
+descriptions.*
+
+**Admin (`/admin`)**
+
+![Admin login](docs/screenshots/admin-login.png)
+*Admin sign-in.*
+
+![Admin dashboard](docs/screenshots/admin-dashboard.png)
+*Dashboard — post/comment counts, recent posts and recent activity.*
+
+![Block editor](docs/screenshots/admin-editor.png)
+*The block editor — heading, paragraph and image blocks for a post.*
+
+![Media library](docs/screenshots/admin-media.png)
+*Media library with the uploaded image (derivatives unavailable until
+the Cloudflare Images binding is configured).*
+
+![AI command centre](docs/screenshots/admin-ai.png)
+*The AI command centre — providers, operating mode, agents, approvals.
+Workers AI reports "not configured" until the `[ai]` binding exists.*
+
+![Content studio](docs/screenshots/admin-studio.png)
+*Content studio — editorial calendar, templates, AI ideas.*
+
+![SEO page](docs/screenshots/admin-seo.png)
+*SEO — sitemap/robots, redirects, 404 log.*
+
+![Security page](docs/screenshots/admin-security.png)
+*Security — headers, login lockout, two-factor authentication.*
+
+![Commerce page](docs/screenshots/admin-commerce.png)
+*Commerce — products, orders, payments, marketplace.*
+
+![Import page](docs/screenshots/admin-import.png)
+*WordPress importer — WXR and SQL-dump import.*
 
 ## Requirements
 
@@ -89,6 +149,7 @@ Then:
 
 ```bash
 npm run dev     # local dev server → http://localhost:8787/ (builds the admin first)
+npm run seed-admin  # first administrator, so you can sign in at /admin (refuses if one exists)
 npm test        # Vitest suite (in-memory SQLite, never a live D1)
 npm run build   # admin SPA build (Vite) + typecheck of worker and admin
 npm run build:admin  # admin SPA build only (Vite → admin/dist/admin/)
@@ -99,9 +160,9 @@ npm run build:admin  # admin SPA build only (Vite → admin/dist/admin/)
 | | Local development | Production |
 |---|---|---|
 | Cloudflare account | Not needed | Required (free tier works) |
-| Database | Wrangler local D1 (SQLite file under `.wrangler/`) | Cloudflare D1 `wordless` |
-| Media | R2 `wordless-media` via miniflare emulation (uploads work; no image derivatives yet — Phase 7) | R2 `wordless-media` |
-| Command | `npm run dev` | `npm run deploy -- --confirm` |
+| Database | Wrangler local D1 (SQLite file under `.wrangler/`) | Cloudflare D1 `wordless-prod` (staging: `wordless-staging`) |
+| Media | R2 `wordless-media` via miniflare emulation (uploads work; image derivatives via the Images binding when bound — Milestone 9) | R2 `wordless-media-prod` |
+| Command | `npm run dev` | `npm run deploy:production` (staging: `npm run deploy:staging`) |
 | Details | [INSTALLATION.md](INSTALLATION.md) | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 ## Project layout
@@ -137,10 +198,23 @@ src/
                       robots, redirects, 404 log, templates, calendar,
                       Yoast/Rank Math import (M7); wl_404_log rows
     ai/               AI orchestrator: tasks, approvals, memory (M6)
+    integrations/     integration registry, email, analytics, social,
+                      marketplace skeleton (M8)
+    commerce/         products, cart, checkout, orders, payments with real
+                      webhook HMAC verification (M8)
+    security/         headers, login lockout, TOTP 2FA, sessions, upload
+                      magic-byte checks (M9)
+    performance/      cache rules + purge on publish, image derivatives (M9)
+    backup/           backup create/verify/restore with checksums (M9)
+    importer/         WXR + SQL-dump WordPress importer, safe PHP
+                      unserialize (M9)
+  ai/                 provider abstraction (Workers AI default), 15 agents,
+                      orchestrator (M6)
   conversion/         PHP → TypeScript engine: lexer, parser, AST, emitter,
                       safety sandbox, static analysis (M4)
   compat/
-    wordpress.ts      45-function WP registry, honestly tagged
+    wordpress.ts      45-function WP registry + AI/SEO/commerce/integrations/
+                      security/performance/backup/import lists, honestly tagged
   test/
     test-db.ts        in-memory SQLite test helper (tests only)
     fake-storage.ts   in-memory MediaStorage for tests (tests only)
@@ -175,21 +249,30 @@ admin/
     pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
                       Menus, Users, Settings, Site Health, Activity, Login,
                       Conversion (M4), ThemeEditor (M5), CommandCentre (M6),
-                      Seo + Studio (M7)
+                      Seo + Studio (M7), Commerce + Integrations (M8),
+                      Security + Backup + Import (M9)
 migrations/
   0001_init.sql       D1 schema v1: 12 wp_* tables + 6 wl_* tables
   0002_m2.sql         wl_redirects + M2 indexes
   0005_m5.sql         wl_themes (M5)
   0006_m6.sql         wl_ai_approvals + wl_ai_memory (M6)
   0007_m7.sql         wl_404_log (M7)
+  0008_m8.sql         products/orders/carts/mail/webhook tables (M8)
+  0009_m9.sql         login attempts, backups, media derivatives (M9)
 scripts/
   install.mjs         installer wizard (Node built-ins only)
-  deploy.mjs          production deploy guard
+  deploy.mjs          deploy guard: pre-deploy checks + --confirm + whoami,
+                      --env staging|production (M10)
+  seed-admin.mjs      first-administrator seed (M10)
   generate-default-theme.mjs   regenerates src/modules/themes/default-theme.ts
                       from themes/wordless-default/ (M5; tested for drift)
+  generate-wp-fixture.mjs      generates test/fixtures/wordpress/ from the
+                      WordPress 7.1.5 schema (M9)
+CHANGELOG.md          release history, M1–M10 with test counts + commit SHAs
+docs/release.md       release procedure: tagging, checklist, rollback (M10)
 ```
 
-## API (Milestone 8)
+## API (Version 1.0.0)
 
 All responses use the envelope `{ ok, data, error }`. The public site is
 served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
@@ -342,6 +425,21 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 | `POST /api/ai/memory/notes` | `manage_options` | Add a note (refuses secret-like text) |
 | `DELETE /api/ai/memory/notes/:id` | `manage_options` | Delete a note (facts cannot be deleted this way) |
 | `POST /api/ai/memory/rebuild` | `manage_options` | Re-ingest facts from the site |
+| `POST /api/auth/2fa/setup` | logged in | Start TOTP setup (otpauth URL + manual code, secret pending) |
+| `POST /api/auth/2fa/confirm` | logged in | Confirm TOTP setup with a code (returns 8 recovery codes) |
+| `GET /api/auth/2fa/status` | logged in | Whether TOTP is enabled for the current user |
+| `POST /api/auth/2fa/disable` | logged in | Disable TOTP (needs password) |
+| `GET /api/auth/sessions` | logged in | Active sessions (no token values shown) |
+| `POST /api/auth/sessions/revoke-all` | logged in | Revoke all of the current user's sessions |
+| `GET /api/security/overview` | `manage_options` | Measured security posture (headers, lockout, 2FA, sessions) |
+| `POST /api/backup/create` | `manage_options` | Create a backup ZIP in R2 (wl_jobs job) |
+| `GET /api/backup` | `manage_options` | List backups (size, checksum, verified flag) |
+| `GET /api/backup/:id/download` | `manage_options` | Download the backup ZIP |
+| `POST /api/backup/:id/verify` | `manage_options` | Re-read the bundle and recompute checksums |
+| `POST /api/backup/:id/restore` | `manage_options` | Restore (typed confirmation `RESTORE`, verified backup only) |
+| `POST /api/import/wxr` | `manage_options` | Import a WXR export (multipart ≤10 MB, wl_jobs job) |
+| `POST /api/import/sql` | `manage_options` | Import a mysqldump (≤10 MB, 12 wp_* tables only) |
+| `GET /api/import/jobs/:id` | `manage_options` | One import job with its per-item report |
 
 \* Draft/private posts require a logged-in user; trashed posts are never returned.
 
@@ -505,7 +603,8 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   command centre are Milestone 6 (built — see
   [What Milestone 6 is](#what-milestone-6-is)).
 - **No image derivatives.** Uploads store the original file only; resizing
-  and WebP conversion are Phase 7.
+  and WebP conversion are Milestone 9 (Cloudflare Images binding when
+  bound, originals served otherwise).
 - **No user reassignment on delete.** Deleting a user who owns posts is
   refused; reassignment is a later milestone.
 
@@ -571,15 +670,20 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 ## What Milestone 5 is not
 
 - **Not full theme.json fidelity.** v1/v2 gaps are documented in
-  `docs/themes/theme-support.md`; `patterns` are recorded, never executed;
-  `post-featured-image` renders nothing (no featured images yet).
+  `docs/themes/theme-support.md`; `post-featured-image` renders nothing
+  (no featured images yet). `wp:pattern` blocks render from the theme's
+  `patterns/*.php` files since 1.0.0 (M10) via the allowlisted inline-PHP
+  evaluator — see [What Milestone 10 is](#what-milestone-10-is).
 - **Not a classic-theme converter.** Classic themes get their stylesheet
   plus an analysis report — no PHP template is converted to a block
   template in v1, and no classic theme is claimed compatible.
 - **Not a site editor.** Template editing, template-part editing and
   pattern creation are later milestones; v1 customizes settings only.
 - **Not image handling.** Theme assets are stored as-is; image derivatives
-  and WebP are Phase 7.
+  are Milestone 9 (Cloudflare Images binding when bound, originals served
+  otherwise). Theme-asset URLs (`get_template_directory_uri()`) are still
+  not served as files — pattern images built from them render with an
+  empty `src` (see M10).
 - **Not a marketplace.** Theme installation from uploads is local/admin
   only; a public marketplace with an SDK is Phase 8.
 - **No parent/child themes.** `get_template()` returns the same theme as
@@ -774,9 +878,6 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - **Not a "future" post status.** The calendar treats a draft with a
   future date as scheduled; a real scheduled-publish status is a
   later milestone.
-- **Not pattern rendering.** Block themes built from `wp:pattern`
-  blocks (e.g. Twenty Twenty-Five) still render nearly empty — the
-  M5 known gap, unchanged.
 - **Not commerce.** Email sending, payments, analytics and social
   publishing are Milestone 8; the content studio's AI ideas are
   drafts only.
@@ -1037,11 +1138,118 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   blobs and serialized PHP objects are not imported (see
   `docs/import/wordpress-import.md`). Converted plugins still go
   through the M4 conversion engine.
-- **Not pattern rendering.** Block themes built from `wp:pattern`
-  blocks (e.g. Twenty Twenty-Five) still render nearly empty — the
-  M5 known gap, unchanged.
-- **Not production readiness.** The installer polish, deploy scripts,
-  release management and final audit are Milestone 10.
+
+## What Milestone 10 is
+
+- **First-administrator seed** (`npm run seed-admin`,
+  `src/modules/auth/seed.ts` + `scripts/seed-admin.mjs`). Interactive
+  prompts or `--login/--email/--password/--confirm` flags; refuses when
+  an administrator already exists (and prints how to use password reset
+  instead); local D1 by default, `--remote` only after a successful
+  `wrangler whoami` plus an extra confirmation. It writes exactly the
+  rows the users service creates — one `wp_users` row with a PBKDF2
+  hash in the repo format and one `wp_usermeta` `wp_capabilities` row
+  holding `{"administrator":true}` — so the seeded admin logs in through
+  the normal login path. The password is never printed or logged. The
+  installer offers to run it after local setup. This closes the open
+  M1–M9 gap: production login is now usable end-to-end.
+- **Block-pattern rendering (M5 gap closed).**
+  `src/modules/themes/patterns.ts` + `pattern-php.ts` + the `pattern`
+  case in `templates.ts`. A `wp:pattern` block renders the theme's
+  `patterns/<name>.php` file: the leading PHP header comment is stripped
+  and the block HTML is rendered through the template renderer (query
+  loops, nested patterns, template parts all work). Inline PHP inside
+  the pattern is evaluated by a small allowlisted evaluator — the twelve
+  i18n/escaping calls Twenty Twenty-Five actually uses (`__`, `_x`,
+  `_e`, `esc_html__/_x/_e`, `esc_attr__/_x/_e`, `esc_url`,
+  `get_template_directory_uri`, `printf` `%s`, `wp_kses_post`) with
+  string literals only. No variables, no includes, no `eval`, no control
+  flow, nothing executed: anything outside the allowlist refuses the
+  whole pattern with a warning. Nesting is bounded (depth 5, shared with
+  template parts) and a self-referencing pattern renders once (cycle
+  guard). Verified against the real Twenty Twenty-Five theme: its
+  `home.html` (header/footer parts + `template-query-loop` pattern) now
+  renders post titles and excerpts where M5 rendered nearly empty.
+  One honest remainder: `get_template_directory_uri()` returns an empty
+  string — theme files are stored in R2 with no public asset URL yet —
+  so image `src` attributes built from it are empty, and the renderer
+  records one warning per page render.
+- **Installer wizard audit** (`scripts/install.mjs`). The Wrangler check
+  now runs *after* dependency install (it previously ran first, so `npx`
+  could download Wrangler from the network on a fresh clone);
+  `--check-only` no longer triggers a download when `node_modules` is
+  missing; the wizard validates the staging/production sections in
+  `wrangler.toml`; the production path provisions the *production*
+  environment (`wordless-prod` D1, `wordless-media-prod` R2,
+  `CONFIG-prod` KV) into the `[env.production]` blocks and deploys with
+  `--env production`; the wizard offers the seed-admin step after local
+  setup. The banner now says the version (1.0.0), not a milestone.
+- **Deploy scripts (dev/staging/prod).** `wrangler.toml` gains
+  `[env.staging]` (`wordless-staging` Worker, `wordless-staging` D1,
+  `wordless-media-staging` R2) and `[env.production]` (`wordless-prod`,
+  `wordless-prod` D1, `wordless-media-prod` R2) — production never shares
+  the dev database or bucket names (verified with `wrangler deploy
+  --dry-run --env staging|production`). `npm run deploy:staging` and
+  `npm run deploy:production` run the pre-deploy checks (full test suite
+  + build + setup check) and refuse without `--confirm`. Fixed a real bug
+  in `scripts/deploy.mjs`: step 2 assigned to an undeclared `r`, which
+  would have crashed every deploy in strict-mode ESM.
+- **Guided install scripts refreshed.** `install.sh` / `install.ps1`
+  check for Node 20+ (not just presence) and pass arguments through to
+  the wizard (`./install.sh --local`).
+- **Release management.** `CHANGELOG.md` (M1–M10 with test counts and
+  pushed commit SHAs), `docs/release.md` (tagging, release checklist,
+  rollback via `wrangler rollback` / redeploying the previous commit),
+  and the 1.0.0 version bump (`package.json` + `VERSION`).
+- **Final audit.** Full regression green (all M1–M9 tests intact); the M9
+  smoke script re-run still passes 45/45; no hardcoded secrets in code,
+  fixtures or docs; every compat list re-checked against implemented
+  behaviour (WORDPRESS_COMPAT 45, AI_COMPAT 6, SEO_COMPAT 10,
+  COMMERCE_COMPAT 8, INTEGRATIONS_COMPAT 6, SECURITY_COMPAT 7,
+  PERFORMANCE_COMPAT 3, BACKUP_COMPAT 3, IMPORT_COMPAT 3) with three
+  stale notes corrected.
+- **No schema change was needed for M10** — the seed uses the existing
+  users tables, patterns use the existing theme files in R2, and
+  environments are configuration, so there is no `migrations/0010_m10.sql`.
+- **Shop list description fix (found while taking screenshots).** The
+  shop list escaped the raw product description, so Gutenberg block
+  comments (`<!-- wp:paragraph -->`) showed up as visible text and the
+  excerpt was wrong. A new `plainTextExcerpt` helper renders the blocks
+  first and strips tags; the single product page already rendered blocks
+  correctly. Covered by a new unit test and a shop-list regression test.
+- 417 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 10 is not
+
+- **Not a live deployment.** No deploy to Cloudflare has ever been
+  attempted in this environment — no account is connected, by the user's
+  instruction. Staging/production are configured and dry-run-validated,
+  but the first real deploy happens when the user runs the installer
+  with their own account.
+- **Not live Workers AI.** Workers AI calls have never been observed —
+  only the mock provider is exercised by tests and local smoke tests.
+  A real Workers AI response is the first thing to verify after the
+  first deploy.
+- **Not live payments or email delivery.** Paystack, Flutterwave,
+  Stripe and the HTTP email provider are implemented from the public
+  docs with real HMAC verification, but no live call has been made —
+  no keys are connected. The mock test mode is the only verified path.
+- **Not theme-asset serving.** `get_template_directory_uri()` returns
+  an empty string, so images referenced from pattern files via the
+  theme URI do not load. A public route serving `themes/<slug>/assets/`
+  from R2 is a later milestone.
+- **Not full-text search.** Search is still LIKE-based (M2).
+- **Not multisite, not WooCommerce, not XML-RPC.** All deferred by design.
+- **Not a "future" post status, not user reassignment on delete, not
+  per-request extension loading on cold start, not Queues/Workflows for
+  conversion and AI tasks.** All documented in their own milestones'
+  "is not" sections and unchanged by M10.
+- **Not a security audit.** The M9 hardening is implemented and tested,
+  but no external penetration test has been run.
+- **Not universal plugin compatibility.** The converter handles the
+  procedural PHP subset well and records everything else honestly —
+  never claim a plugin converts until its own report says so.
 
 ## What Milestone 3 is
 
@@ -1073,9 +1281,9 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   the file in R2 via the `MEDIA` binding, creates the attachment post and
   postmeta (filename, size, alt); list/get/alt-update/delete endpoints and
   `GET /media/:key` serving from R2 with a long cache. Tests use a fake
-  in-memory R2 bucket, never a live one. **Gap:** image derivatives / WebP
-  conversion are NOT in M3 — they need the Cloudflare Images binding or a
-  WASM pipeline (Phase 7).
+  in-memory R2 bucket, never a live one. **Gap (closed in M9):** image
+  derivatives / WebP conversion were NOT in M3 — they arrived in
+  Milestone 9 via the Cloudflare Images binding.
 - **Settings.** `GET/PUT /api/settings` with validation (site title/tagline
   non-empty, posts_per_page 1–100, permalink structure one of the four M2
   values, default comment status, max-links 0–10, IANA timezone). The admin
@@ -1107,15 +1315,16 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   command centre are Milestone 6 (built — see
   [What Milestone 6 is](#what-milestone-6-is)).
 - **No image derivatives.** Uploads store the original file only; resizing
-  and WebP conversion are Phase 7.
+  and WebP conversion are Milestone 9 (Cloudflare Images binding when
+  bound, originals served otherwise).
 - **No user reassignment on delete.** Deleting a user who owns posts is
   refused; reassignment is a later milestone.
 - **No commerce, email, payments, analytics or social integrations.**
   Those are Phase 8.
 - **No production deployment verified yet.** Local D1 + `wrangler dev` are
-  verified; the production path is implemented but untested (no Cloudflare
-  account connected — deployment happens when the user installs with their
-  own account).
+  verified; the production path is implemented but never attempted (no
+  Cloudflare account connected — deployment happens when the user installs
+  with their own account).
 
 ## Documentation
 
@@ -1123,6 +1332,10 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
 - [DEPLOYMENT.md](DEPLOYMENT.md) — production deployment on Cloudflare
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — common failures and fixes
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module map + pointer to the full design
+- [CHANGELOG.md](CHANGELOG.md) — release history, M1–M10
+- [docs/release.md](docs/release.md) — release procedure: tagging, checklist, rollback
+- [docs/security/security.md](docs/security/security.md) — security model (M9)
+- [docs/import/wordpress-import.md](docs/import/wordpress-import.md) — WordPress importer (M9)
 - `../docs/01-discovery-assessment.md` — WordPress 7.1.5 source assessment
 - `../docs/02-architecture.md` — full architecture and decisions log
 
@@ -1138,7 +1351,10 @@ claim to the WordPress trademark.
 
 ## Contributing
 
-Milestone 3 is a working core CMS with a real admin and editor, not a
-finished product. See the roadmap in `../docs/` (phases 1–10). Do not mark
+Wordless 1.0.0 is a working platform with a real admin, editor, AI
+command centre, commerce, security hardening, backup/restore, a
+WordPress importer and production-ready deploy tooling — not a finished
+product. See the roadmap in `../docs/` (phases 1–10) and
+`CHANGELOG.md` for what each milestone shipped. Do not mark
 unfinished features as complete, do not commit secrets, and keep every stub
 labelled `STUB` until it is real.

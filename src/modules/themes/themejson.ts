@@ -15,9 +15,12 @@
  *   (`styles.blocks`) and `settings.custom` are NOT supported; they are
  *   recorded as unsupported warnings and ignored.
  *
- * `patterns` are recorded, never executed: a pattern is a reusable block
- * fragment, and rendering patterns is out of scope for v1 of the visual
- * editor (see ARCHITECTURE.md).
+ * `patterns` in theme.json are recorded, never executed: the list names
+ * reusable block fragments. Rendering a pattern happens from the theme's
+ * `patterns/<name>.php` file (M10, see patterns.ts) — the leading PHP
+ * header is stripped and the block HTML is rendered; any further PHP
+ * refuses the pattern. A pattern listed in theme.json with no file is
+ * not rendered (the renderer warns).
  */
 
 export type ThemeJsonVersion = 1 | 2 | 3;

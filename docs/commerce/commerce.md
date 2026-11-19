@@ -5,6 +5,12 @@ through a real payment provider, and orders. Every price is an integer
 number of minor units (kobo/cents) — never a float. Every number the
 store reports comes from its own stored rows. Nothing is faked.
 
+![Shop page](../screenshots/public-shop.png)
+*The public shop — products with real minor-unit prices.*
+
+![Admin Commerce page](../screenshots/admin-commerce.png)
+*The admin Commerce page — products, orders, payments, marketplace.*
+
 ## What is built
 
 | Piece | Where | Notes |

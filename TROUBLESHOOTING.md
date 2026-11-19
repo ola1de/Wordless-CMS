@@ -91,6 +91,32 @@ If it hangs for more than a few minutes, check your network and retry. Do
 not install Wrangler globally — the project-managed version is the supported
 one.
 
+## `npm run seed-admin` refuses (admin already exists)
+
+**Symptom:** `An administrator already exists — refusing to seed another one.`
+
+**Fix:** this is the script working as designed — it never creates a
+second first-admin. Ask an existing administrator to reset your
+password (Users page → Reset password). If you seeded against the wrong
+database, check whether you passed `--remote` (remote D1) or not
+(local D1).
+
+## Deploy refuses or picks the wrong environment
+
+**Symptom:** `npm run deploy` refuses without `--confirm`, or a deploy
+lands on the wrong Worker.
+
+**Fixes:**
+- `npm run deploy:staging` / `npm run deploy:production` already pass
+  `--confirm` and the right `--env`; a bare `npm run deploy` needs
+  `-- --confirm [--env staging|production]`.
+- Check which environment you are in: staging is `wordless-staging`
+  (D1 `wordless-staging`), production is `wordless-prod` (D1
+  `wordless-prod`). They never share a database — if a deploy reports
+  the wrong database name, stop and check the `--env` flag.
+- Pre-deploy checks (tests + build + setup check) run first; fix the
+  failing check rather than bypassing it.
+
 ## Still stuck?
 
 Run `npm run setup -- --check-only` and copy its full output, plus the exact

@@ -31,7 +31,7 @@ import {
   type TemplateContext,
   type TemplatePostData,
 } from "../themes/templates";
-import { renderContent } from "./blocks";
+import { plainTextExcerpt, renderContent } from "./blocks";
 import { escapeHtml, layout, type NavItem } from "./theme";
 import { buildPageSeo } from "../seo/head";
 import { listProducts } from "../commerce/products";
@@ -527,7 +527,7 @@ export async function renderShop(db: Db, page = 1, opts?: RenderOptions): Promis
             (p) =>
               `<li><h2><a href="/shop/${escapeHtml(p.slug)}">${escapeHtml(p.name)}</a></h2>` +
               `<p class="price">${escapeHtml(formatMoney(p.priceMinor, p.currency))}</p>${stockNote(p)}` +
-              `${p.description ? `<p>${escapeHtml(p.description.slice(0, 200))}</p>` : ""}</li>`,
+              `${p.description ? `<p>${escapeHtml(plainTextExcerpt(p.description))}</p>` : ""}</li>`,
           )
           .join("")}</ul>` + pagination(page, result.totalPages, "/shop"));
   const body = `<h1>Shop</h1>${inner}`;

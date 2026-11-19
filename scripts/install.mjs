@@ -33,7 +33,7 @@ const BANNER = `
    \\ V  V /   | |_| |  _ <  | |_| | |___| |___ ___) |___) |
     \\_/\\_/     \\___/ |_| \\_\\ |____/|_____|_____|____/|____/
 
-  The autonomous website operating system — Milestone 3
+  The autonomous website operating system — Version 1.0.0
 `;
 
 function log(msg = "") {
@@ -97,6 +97,13 @@ function checkNpm() {
 }
 
 function checkWrangler() {
+  // --check-only must not download anything: without node_modules the
+  // project-managed Wrangler is not present yet, so report that instead
+  // of letting npx fetch it from the network.
+  if (CHECK_ONLY && !existsSync(join(ROOT, "node_modules", "wrangler"))) {
+    warn("Wrangler not installed yet (node_modules missing — run `npm install` first).");
+    return;
+  }
   const r = run("npx", ["wrangler", "--version"]);
   if (!r.ok) {
     fail("Wrangler (project devDependency) could not run. Try `npm install` again; see TROUBLESHOOTING.md.");
@@ -117,11 +124,15 @@ function validateWranglerToml() {
     ['binding = "CONFIG"', "KV binding CONFIG"],
     ['binding = "ASSETS"', "Static Assets binding ASSETS (required — without it /admin deep links 503)"],
     ['directory = "./admin/dist"', "Static Assets directory for the admin SPA"],
+    ['[env.staging]', "staging environment (M10)"],
+    ['[env.production]', "production environment (M10)"],
+    ['database_name = "wordless-staging"', "staging D1 database name"],
+    ['database_name = "wordless-prod"', "production D1 database name"],
   ];
   for (const [marker, label] of required) {
     if (!text.includes(marker)) fail(`wrangler.toml is missing ${label} (${marker}).`);
   }
-  ok("wrangler.toml exists and declares DB / MEDIA / CONFIG bindings + admin Static Assets");
+  ok("wrangler.toml exists and declares DB / MEDIA / CONFIG bindings + admin Static Assets + staging/production environments");
   if (!existsSync(join(ROOT, "admin", "vite.config.ts"))) {
     fail("admin/vite.config.ts is missing — the React admin build is not configured. Re-clone the repository.");
   }
@@ -191,10 +202,25 @@ function updateTomlValue(sectionHeader, key, newValue) {
   writeFileSync(path, `${lines.join("\n")}`);
 }
 
+/** True when a key inside a named [[…]] block still holds REPLACE-ME. */
+function envBlockHasPlaceholder(toml, blockHeader, key) {
+  const lines = toml.split("\n");
+  let inBlock = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[[")) inBlock = trimmed === blockHeader;
+    else if (trimmed.startsWith("[") && trimmed.endsWith("]")) inBlock = false;
+    if (inBlock && trimmed.startsWith(`${key} = "REPLACE-ME"`)) return true;
+  }
+  return false;
+}
+
 async function productionPath() {
   log("\n  ── Production deploy (Cloudflare) ─────────────────────────────");
-  log("  This will create real Cloudflare resources. Nothing runs without");
-  log("  your explicit confirmation at each step.\n");
+  log("  This provisions the PRODUCTION environment: D1 `wordless-prod`,");
+  log("  R2 `wordless-media-prod` and KV `CONFIG-prod` — separate from the");
+  log("  local/dev resources. Nothing runs without your explicit");
+  log("  confirmation at each step.\n");
 
   if (!(await confirm("Open a browser to sign in to Cloudflare (official `wrangler login` OAuth flow)?"))) {
     log("\n  Production setup cancelled. Your local setup is unaffected.");
@@ -209,58 +235,58 @@ async function productionPath() {
 
   const toml = readFileSync(join(ROOT, "wrangler.toml"), "utf8");
 
-  if (toml.includes('database_id = "REPLACE-ME"')) {
-    if (await confirm("Create the production D1 database `wordless`?")) {
-      r = run("npx", ["wrangler", "d1", "create", "wordless"]);
-      if (!r.ok) fail("`wrangler d1 create wordless` failed. Check the output above.");
+  if (envBlockHasPlaceholder(toml, "[[env.production.d1_databases]]", "database_id")) {
+    if (await confirm("Create the production D1 database `wordless-prod`?")) {
+      r = run("npx", ["wrangler", "d1", "create", "wordless-prod"]);
+      if (!r.ok) fail("`wrangler d1 create wordless-prod` failed. Check the output above.");
       const match = r.stdout.match(/database_id\s*=\s*"([^"]+)"/) ?? r.stdout.match(/([0-9a-f]{8}-[0-9a-f-]{27,})/);
       if (!match) fail("Could not read the new D1 database_id from wrangler output.");
-      updateTomlValue("[[d1_databases]]", "database_id", match[1]);
-      ok(`D1 database created (id saved to wrangler.toml)`);
+      updateTomlValue("[[env.production.d1_databases]]", "database_id", match[1]);
+      ok(`D1 database created (id saved to wrangler.toml [env.production])`);
     } else {
       warn("Skipping D1 creation — remote migrations and deploy cannot run without it.");
     }
   } else {
-    ok("D1 database already configured in wrangler.toml");
+    ok("Production D1 database already configured in wrangler.toml");
   }
 
-  if (await confirm("Create the R2 bucket `wordless-media` (skipped automatically if it already exists)?")) {
-    r = run("npx", ["wrangler", "r2", "bucket", "create", "wordless-media"]);
-    if (r.ok) ok("R2 bucket `wordless-media` created");
-    else if (/already exists/i.test(r.stdout + r.stderr)) warn("R2 bucket `wordless-media` already exists — continuing");
-    else fail("`wrangler r2 bucket create wordless-media` failed. Check the output above.");
+  if (await confirm("Create the R2 bucket `wordless-media-prod` (skipped automatically if it already exists)?")) {
+    r = run("npx", ["wrangler", "r2", "bucket", "create", "wordless-media-prod"]);
+    if (r.ok) ok("R2 bucket `wordless-media-prod` created");
+    else if (/already exists/i.test(r.stdout + r.stderr)) warn("R2 bucket `wordless-media-prod` already exists — continuing");
+    else fail("`wrangler r2 bucket create wordless-media-prod` failed. Check the output above.");
   }
 
-  if (toml.includes("[[kv_namespaces]]") && /id = "REPLACE-ME"/.test(toml)) {
-    if (await confirm("Create the KV namespace `CONFIG`?")) {
-      r = run("npx", ["wrangler", "kv", "namespace", "create", "CONFIG"]);
-      if (!r.ok) fail("`wrangler kv namespace create CONFIG` failed. Check the output above.");
+  if (envBlockHasPlaceholder(toml, "[[env.production.kv_namespaces]]", "id")) {
+    if (await confirm("Create the KV namespace `CONFIG-prod`?")) {
+      r = run("npx", ["wrangler", "kv", "namespace", "create", "CONFIG-prod"]);
+      if (!r.ok) fail("`wrangler kv namespace create CONFIG-prod` failed. Check the output above.");
       const match = r.stdout.match(/id\s*=\s*"([^"]+)"/) ?? r.stdout.match(/"([a-f0-9]{32})"/);
       if (!match) fail("Could not read the new KV namespace id from wrangler output.");
-      updateTomlValue("[[kv_namespaces]]", "id", match[1]);
-      ok("KV namespace created (id saved to wrangler.toml)");
+      updateTomlValue("[[env.production.kv_namespaces]]", "id", match[1]);
+      ok("KV namespace created (id saved to wrangler.toml [env.production])");
     }
   }
 
-  if (await confirm("Apply D1 migrations to the REMOTE database?")) {
-    r = run("npx", ["wrangler", "d1", "migrations", "apply", "DB", "--remote"], { stdio: "inherit" });
+  if (await confirm("Apply D1 migrations to the REMOTE production database?")) {
+    r = run("npx", ["wrangler", "d1", "migrations", "apply", "DB", "--remote", "--env", "production"], { stdio: "inherit" });
     if (!r.ok) fail("Remote D1 migrations failed. See TROUBLESHOOTING.md.");
     ok("Remote D1 migrations applied");
   } else {
     fail("Remote migrations declined — deploy cannot proceed without the schema.");
   }
 
-  if (!(await confirm("Deploy the Worker to production (`wrangler deploy`)?"))) {
-    log("\n  Deploy cancelled. Remote database is ready; run `npm run deploy -- --confirm` later.");
+  if (!(await confirm("Deploy the Worker to production (`wrangler deploy --env production`)?"))) {
+    log("\n  Deploy cancelled. Remote database is ready; run `npm run deploy:production` later.");
     return;
   }
-  r = run("npx", ["wrangler", "deploy"]);
+  r = run("npx", ["wrangler", "deploy", "--env", "production"]);
   if (!r.ok) fail("`wrangler deploy` failed. Check the output above and TROUBLESHOOTING.md.");
   const urlMatch = (r.stdout + r.stderr).match(/https:\/\/[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.workers\.dev/);
   const url = urlMatch ? urlMatch[0] : null;
   if (!url) {
     warn("Deploy reported success but no workers.dev URL was found in the output.");
-    info("Run `npx wrangler deploy` again and check the printed URL, then verify /api/health manually.");
+    info("Run `npx wrangler deploy --env production` again and check the printed URL, then verify /api/health manually.");
     return;
   }
   ok(`Deployed to ${url}`);
@@ -277,6 +303,7 @@ async function productionPath() {
     warn(`Deployed, but /api/health could not be reached (${err.message}). Check the URL and Worker logs.`);
   }
   log(`\n  Your site is live at ${url}`);
+  log("  First login: seed the administrator with `npm run seed-admin -- --remote`.");
 }
 
 // ------------------------------------------------------------------ main
@@ -289,7 +316,6 @@ async function main() {
   log("  1. Environment checks");
   checkNode();
   checkNpm();
-  checkWrangler();
 
   log("\n  2. Configuration");
   validateWranglerToml();
@@ -297,16 +323,19 @@ async function main() {
   log("\n  3. Dependencies");
   ensureDeps();
 
+  log("\n  4. Wrangler (project-managed)");
+  checkWrangler();
+
   if (CHECK_ONLY) {
     log("\n  ✓ All checks passed. Nothing was installed or changed.");
     log("  Run `npm run setup` (interactive) or `npm run setup -- --local` to set up local development.");
     return;
   }
 
-  log("\n  4. Local database");
+  log("\n  5. Local database");
   applyLocalMigrations();
 
-  log("\n  5. Admin SPA");
+  log("\n  6. Admin SPA");
   buildAdmin();
 
   log("\n  ✓ Local setup complete.");
@@ -317,6 +346,14 @@ async function main() {
   log("  http://localhost:8787/api/health (API health check).\n");
 
   if (LOCAL_ONLY) return;
+
+  if (await confirm("Create the first administrator now (so you can sign in at /admin)?")) {
+    log("\n  Running `npm run seed-admin` (local D1)…\n");
+    const seed = run("npm", ["run", "seed-admin"], { stdio: "inherit" });
+    if (!seed.ok) {
+      warn("Seeding the administrator did not complete — run `npm run seed-admin` later (it refuses when an admin already exists).");
+    }
+  }
 
   const choice = await ask("  Choose next step:\n    [1] Local development — start `npm run dev` now\n    [2] Production Cloudflare deploy\n    [Enter] Done for now\n  Your choice: ");
   if (choice === "1") {

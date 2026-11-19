@@ -4,7 +4,7 @@ import { createPost } from "../posts/service";
 import { createProduct } from "../commerce/products";
 import { addToCart, getCart, newCartToken } from "../commerce/cart";
 import { createOrderFromCart } from "../commerce/orders";
-import { renderContent } from "./blocks";
+import { plainTextExcerpt, renderContent } from "./blocks";
 import {
   renderCartPage,
   renderCheckoutResult,
@@ -63,6 +63,18 @@ describe("block rendering", () => {
     expect(renderContent("<p>Classic</p>")).toBe("<p>Classic</p>");
     expect(renderContent("plain text")).toBe("plain text");
   });
+
+  it("plainTextExcerpt strips block comments and tags (M10 shop fix)", () => {
+    const content =
+      '<!-- wp:paragraph --><p>Five vinyl stickers for your laptop. Ships nowhere.</p><!-- /wp:paragraph -->' +
+      '<!-- wp:paragraph --><p>Second paragraph.</p><!-- /wp:paragraph -->';
+    const excerpt = plainTextExcerpt(content);
+    expect(excerpt).toBe("Five vinyl stickers for your laptop. Ships nowhere. Second paragraph.");
+    expect(excerpt).not.toContain("wp:paragraph");
+    expect(excerpt).not.toContain("<p>");
+    expect(plainTextExcerpt("plain text")).toBe("plain text");
+    expect(plainTextExcerpt("x".repeat(250), 10)).toBe(`${"x".repeat(10)}…`);
+  });
 });
 
 describe("public pages", () => {
@@ -103,6 +115,8 @@ describe("shop pages (M8)", () => {
   it("shop lists published products with prices, not drafts", async () => {
     await createProduct(tdb.db, {
       name: "Pack Hoodie",
+      description:
+        "<!-- wp:paragraph --><p>Warm hoodie with the pack logo.</p><!-- /wp:paragraph -->",
       priceMinor: 125000,
       currency: "NGN",
       stock: 5,
@@ -119,6 +133,8 @@ describe("shop pages (M8)", () => {
     expect(page.status).toBe(200);
     expect(page.html).toContain("Pack Hoodie");
     expect(page.html).toContain("₦1,250.00");
+    expect(page.html).toContain("Warm hoodie with the pack logo.");
+    expect(page.html).not.toContain("wp:paragraph");
     expect(page.html).not.toContain("Hidden Draft");
   });
 

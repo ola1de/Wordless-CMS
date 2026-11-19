@@ -141,3 +141,26 @@ export function renderContent(content: string): string {
     .filter((html) => html.length > 0)
     .join("\n");
 }
+
+/**
+ * Plain-text excerpt of block content (M10 fix: the shop list used to
+ * escape the raw description, so `<!-- wp:paragraph -->` comments
+ * showed up as visible text). Renders the blocks first, then strips
+ * every tag, decodes the entities the renderer emits, collapses
+ * whitespace and truncates to maxLength characters (with an ellipsis
+ * when truncated). The caller still escapes the result for HTML.
+ */
+export function plainTextExcerpt(content: string, maxLength = 200): string {
+  const text = renderContent(content)
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}…`;
+}

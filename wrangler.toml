@@ -73,3 +73,55 @@ id = "REPLACE-ME"
 # Local development: put the same names in `.dev.vars` (git-ignored).
 # Without them the providers report "not configured" and checkout
 # refuses with a 503 — it never fakes a successful payment.
+
+# Environments (Milestone 10) — staging and production are separate
+# Workers with separate D1 databases and R2 buckets. Production NEVER
+# shares the dev database or bucket names. Deploy with:
+#   npm run deploy:staging      (tests + build + checks, then deploy --env staging)
+#   npm run deploy:production   (tests + build + checks, then deploy --env production)
+# Promotion path: dev → staging → production (see DEPLOYMENT.md).
+# The installer provisions the production resources (wordless-prod /
+# wordless-media-prod) when you choose the production path; the ids land
+# in the [env.production] blocks below. Until then the REPLACE-ME
+# placeholders are expected — local development uses the top-level
+# bindings and never touches staging or production.
+
+[env.staging]
+name = "wordless-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "wordless-staging"
+database_id = "REPLACE-ME"
+migrations_dir = "migrations"
+
+[[env.staging.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "wordless-media-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "CONFIG"
+id = "REPLACE-ME"
+
+# [env.staging.ai]
+# binding = "AI"
+
+[env.production]
+name = "wordless-prod"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "wordless-prod"
+database_id = "REPLACE-ME"
+migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "wordless-media-prod"
+
+[[env.production.kv_namespaces]]
+binding = "CONFIG"
+id = "REPLACE-ME"
+
+# [env.production.ai]
+# binding = "AI"

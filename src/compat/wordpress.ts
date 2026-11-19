@@ -73,7 +73,7 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "register_post_type", level: "partial", description: "Registers in memory only (not persisted, no admin UI, no rewrite rules yet)." },
   { name: "register_taxonomy", level: "partial", description: "Registers in memory only (not persisted, no term UI yet)." },
   { name: "add_shortcode", level: "partial", description: "Registers the tag and callback in memory; shortcode rendering in post content is not built yet." },
-  { name: "wp_schedule_event", level: "partial", description: "Persists a scheduled job row in wl_jobs; no cron runner executes it yet (Workers Cron Triggers, Phase 6)." },
+  { name: "wp_schedule_event", level: "partial", description: "Persists a scheduled job row in wl_jobs; no cron runner executes it yet (Workers Cron Triggers are a later step)." },
   { name: "current_user_can", level: "partial", description: "Checks the capability map for the current request user; false when anonymous." },
   { name: "get_user_meta", level: "partial", description: "Reads wp_usermeta as JSON; single-value only (no multi-value arrays yet)." },
   { name: "update_user_meta", level: "partial", description: "Upserts wp_usermeta as JSON." },
@@ -88,7 +88,7 @@ export const WORDPRESS_COMPAT: CompatEntry[] = [
   { name: "wp_nav_menu", level: "partial", description: "HTML for a menu by location or id (M2). No Walker/theme args yet." },
   { name: "get_media_items", level: "partial", description: "Attachment posts, paginated with a MIME filter (M3). Returns MediaRecord objects, not WP_Post objects." },
   { name: "wp_get_attachment_url", level: "partial", description: "Public /media/<key> URL for an attachment id (M3). Empty string when the id is not an attachment." },
-  { name: "media_handle_upload", level: "partial", description: "Validates and stores a file in R2, creating the attachment post + postmeta (M3). Needs a MediaStorage in the context; throws a stub error when none is wired. No image derivatives (Phase 7)." },
+  { name: "media_handle_upload", level: "partial", description: "Validates and stores a file in R2, creating the attachment post + postmeta (M3). Needs a MediaStorage in the context; throws a stub error when none is wired. Image derivatives exist since M9 via the Cloudflare Images binding (originals served when unbound)." },
   { name: "get_user_locale", level: "partial", description: "The current user's locale: the locale passed in the WpContext (resolved once per request from the site_locale option), default en_US (M4). No per-user locale UI yet." },
   { name: "get_locale", level: "partial", description: "Site locale from the WpContext (resolved once per request from the site_locale option), default en_US (M4)." },
   { name: "__", level: "partial", description: "Returns the string unchanged: no translation files exist in M4, so there is nothing to translate from (M4)." },
@@ -453,7 +453,7 @@ export const SECURITY_COMPAT: CompatEntry[] = [
 ];
 
 export const PERFORMANCE_COMPAT: CompatEntry[] = [
-  { name: "wl_performance_cache", level: "partial", description: "Anonymous public GETs are cached 60 s with stale-while-revalidate=60; publishing a post purges its URL, the home page and its term pages from the Cache API (purge failures never fail the publish). Cache hit rates are not observable from inside the Worker and are not reported." },
+  { name: "wl_performance_cache", level: "partial", description: "Anonymous public GETs are cached 60 s with stale-while-revalidate=60; publishing a post purges its URL, the home page and its term pages from the Cache API (purge failures never fail the publish). Imports do NOT purge — an imported post appears once the 60 s entry expires. Cache hit rates are not observable from inside the Worker and are not reported." },
   { name: "wl_performance_derivatives", level: "partial", description: "GET /media/:key?width=&format= — resized/WebP variants via the Cloudflare Images binding when bound (stored in R2 + wl_media_derivatives for srcset); when unbound the endpoint serves the original and says so (X-Wordless-Derivatives: unavailable). A resize is never faked." },
   { name: "wl_performance_health", level: "partial", description: "The Site Health response carries a performance section with measured numbers: D1 row counts, R2 object count (capped at 1,000, reported as 'at least'), cache config and derivative status. Compression is applied by the Cloudflare edge, not the Worker." },
 ];

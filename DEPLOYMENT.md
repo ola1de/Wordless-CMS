@@ -6,7 +6,9 @@ There are two supported routes, both guarded:
 | Route | Command | Guard |
 |---|---|---|
 | Installer production path | `npm run setup`, choose **2** | Choice + per-step confirmation |
-| Deploy script | `npm run deploy -- --confirm` | `--confirm` flag **and** `wrangler whoami` |
+| Deploy script (production) | `npm run deploy:production` | `--confirm` flag **and** `wrangler whoami` + pre-deploy checks (tests + build + setup check) |
+| Deploy script (staging) | `npm run deploy:staging` | Same guards, `--env staging` |
+| Deploy script (default env) | `npm run deploy -- --confirm` | Same guards, no `--env` |
 
 A plain `npm run deploy` (no `--confirm`) **refuses to deploy**.
 
@@ -20,41 +22,45 @@ A plain `npm run deploy` (no `--confirm`) **refuses to deploy**.
 
 ## What deployment does
 
-1. **Login check** — `npx wrangler login`, then `npx wrangler whoami` must
+1. **Pre-deploy checks** (deploy script only) — `npm test`, `npm run
+   build`, `npm run setup -- --check-only`. Any failure stops the deploy.
+2. **Login check** — `npx wrangler login`, then `npx wrangler whoami` must
    succeed.
-2. **Provisioning** (only if the ids in `wrangler.toml` are still the
-   `REPLACE-ME` placeholders, and only with your confirmation):
-   - `wrangler d1 create wordless` → id written into `wrangler.toml`
-   - `wrangler r2 bucket create wordless-media`
-   - `wrangler kv namespace create CONFIG` → id written into `wrangler.toml`
-3. **Build** — `npm run build` (admin SPA + worker typecheck).
-4. **Remote migrations** — `wrangler d1 migrations apply DB --remote`
-   (applies `migrations/0001_init.sql` and `migrations/0002_m2.sql` to the
-   real D1 database).
-5. **Deploy** — `wrangler deploy` (bundles `src/index.ts` + Static Assets).
-6. **Verify** — fetches `<deployed-url>/api/health` and reports the URL.
+3. **Provisioning** (only if the ids in the `[env.production]` blocks of
+   `wrangler.toml` are still the `REPLACE-ME` placeholders, and only with
+   your confirmation):
+   - `wrangler d1 create wordless-prod` → id written into `[env.production]`
+   - `wrangler r2 bucket create wordless-media-prod`
+   - `wrangler kv namespace create CONFIG-prod` → id written into `[env.production]`
+4. **Build** — `npm run build` (admin SPA + worker typecheck).
+5. **Remote migrations** — `wrangler d1 migrations apply DB --remote --env production`
+   (applies all migrations in `migrations/` to the real D1 database).
+6. **Deploy** — `wrangler deploy --env production` (bundles `src/index.ts` + Static Assets).
+7. **Verify** — fetches `<deployed-url>/api/health` and reports the URL.
    Deployment is only reported as successful if the health check returns ok.
+8. **First administrator** — seed one on the deployed site:
+   `npm run seed-admin -- --remote` (refuses when an admin already exists).
 
 ## After deployment
 
-- Your site lives at the printed `https://wordless.<subdomain>.workers.dev`
+- Your site lives at the printed `https://wordless-prod.<subdomain>.workers.dev`
   URL (or your custom domain once configured — a later milestone).
 - Check logs: `npx wrangler tail`
-- Check D1: `npx wrangler d1 execute DB --remote --command "SELECT count(*) FROM wp_posts;"`
-- **Known gap (M1, still open in M3):** there is no admin-user seed
-  command yet. The Users page (M3) can create further users, but the
-  *first* administrator still needs seed tooling — a Phase 3 task; until
-  then, production login is not usable end-to-end. Do not hand-edit the
-  production database to work around this — wait for the seed tooling.
+- Check D1: `npx wrangler d1 execute DB --remote --env production --command "SELECT count(*) FROM wp_posts;"`
+- Sign in at `/admin` with the seeded administrator.
 
 ## Environments
 
-| Environment | Database | Command |
-|---|---|---|
-| Local dev | Wrangler local D1 (`.wrangler/state/`) | `npm run dev` |
-| Production | Cloudflare D1 `wordless` | `npm run deploy -- --confirm` |
+| Environment | Worker | Database | R2 bucket | Command |
+|---|---|---|---|---|
+| Local dev | `wordless` (local) | Wrangler local D1 (`.wrangler/state/`) | local R2 emulation | `npm run dev` |
+| Staging | `wordless-staging` | Cloudflare D1 `wordless-staging` | `wordless-media-staging` | `npm run deploy:staging` |
+| Production | `wordless-prod` | Cloudflare D1 `wordless-prod` | `wordless-media-prod` | `npm run deploy:production` |
 
-Staging is a later milestone (same commands, separate Worker name/DB).
+Promotion path: **dev → staging → production**. Deploy a release to
+staging first, verify `/api/health` and the admin there, then deploy the
+same commit to production. Production never shares the dev database or
+bucket names.
 
 ## Costs (verify at deploy time)
 
@@ -67,15 +73,22 @@ usage grows (see `../docs/02-architecture.md` §9).
 
 ## Rollback
 
-M1 has no automated rollback. To roll back a bad deploy, redeploy the
-previous good commit:
+Migrations are additive (`CREATE TABLE IF NOT EXISTS`, new nullable
+columns), so a rollback never needs a down-migration. Two supported
+paths — full procedure in [docs/release.md](docs/release.md):
 
 ```bash
+# Fastest: restore the previous deployment
+npx wrangler rollback --env production
+
+# Or redeploy the previous good commit
 git log --oneline -5        # find the last good commit
 git checkout <commit>
-npm run deploy -- --confirm
+npm run deploy:production
 git checkout main
 ```
 
-Database migrations are additive in M1 (`CREATE TABLE IF NOT EXISTS`);
-there is no down-migration yet.
+After any rollback, verify `/api/health` reports the expected version.
+If the bad deploy wrote bad *data* (not just code), restore from a
+backup instead (admin Backup page → verify → restore with the typed
+`RESTORE` confirmation). Never hand-edit the production database.

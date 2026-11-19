@@ -5,6 +5,12 @@ number it reports is computed from the site's own stored content.
 Nothing is a ranking, a traffic estimate, or a guess about what a
 search engine will do.
 
+![Admin SEO page](../screenshots/admin-seo.png)
+*The admin SEO page — sitemap/robots, redirects, 404 log.*
+
+![Content studio](../screenshots/admin-studio.png)
+*The content studio — editorial calendar, templates, AI ideas.*
+
 ## Per-post SEO fields
 
 Stored as `wp_postmeta` (keys `_wl_seo_*`), editable in the block

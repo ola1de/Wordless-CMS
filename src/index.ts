@@ -211,7 +211,7 @@ import {
 } from "./modules/backup/service";
 import { runImportJob } from "./modules/importer/service";
 
-const VERSION = "0.9.0";
+const VERSION = "1.0.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from

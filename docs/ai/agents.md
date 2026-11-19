@@ -5,6 +5,10 @@ Wordless ships 15 specialist agents, run from the command centre
 handler — none is a stub. An agent that depends on a later milestone
 reports itself **unavailable** instead of faking a result.
 
+![AI command centre](../screenshots/admin-ai.png)
+*The AI command centre — providers, operating mode, agents, approvals.
+Workers AI reports "not configured" until the `[ai]` binding exists.*
+
 ## Provider rule
 
 Agents marked "provider" need a configured AI provider. **Workers AI is

@@ -28,18 +28,27 @@ npm run setup
 
 ### What the wizard does
 
-1. **Environment checks** — Node >= 20, npm present, Wrangler runnable.
-   Fails with a clear message if anything is missing.
+1. **Environment checks** — Node >= 20, npm present. Fails with a
+   clear message if anything is missing.
 2. **Configuration validation** — `wrangler.toml` must exist and declare the
-   `DB` (D1), `MEDIA` (R2) and `CONFIG` (KV) bindings. Placeholder ids
+   `DB` (D1), `MEDIA` (R2) and `CONFIG` (KV) bindings plus the
+   `[env.staging]` / `[env.production]` sections. Placeholder ids
    (`REPLACE-ME`) are expected and fine for local work.
 3. **Dependencies** — runs `npm install` if `node_modules/` is missing.
-4. **Local database** — applies `migrations/0001_init.sql` to Wrangler's
+4. **Wrangler** — the project-managed Wrangler runs (`npx wrangler
+   --version`); no global install is needed or used.
+5. **Local database** — applies all migrations to Wrangler's
    local D1 (a SQLite file under `.wrangler/state/`). No account, no
    network call to Cloudflare.
-5. **Choice** — local development (prints/offers `npm run dev`) or
+6. **Admin SPA** — builds the React admin (`npm run build:admin`).
+7. **First administrator (offered)** — the wizard offers to run
+   `npm run seed-admin` so you can sign in at `/admin`. It refuses
+   when an administrator already exists.
+8. **Choice** — local development (prints/offers `npm run dev`) or
    production Cloudflare deploy (only with your explicit choice and
-   confirmation at every remote step).
+   confirmation at every remote step; provisions the `wordless-prod`
+   D1 database, `wordless-media-prod` R2 bucket and `CONFIG-prod` KV
+   namespace into the `[env.production]` blocks).
 
 ### Shortcuts
 
@@ -64,16 +73,32 @@ serves the Worker with local D1/R2/KV emulation.
 
 ## Environment variables
 
-None are required for Milestone 1. `.env.example` documents the optional
-variables for later milestones (Cloudflare account id for production,
-AI/email/payment provider keys). Copy it to `.env` only if you need one —
-`.env` is git-ignored, `.env.example` is safe to commit.
+None are required for local development. `.env.example` documents the
+optional variables (Cloudflare account id for production, AI/email/
+payment provider keys). Copy it to `.env` only if you need one —
+`.env` is git-ignored, `.env.example` is safe to commit. Secrets for a
+deployed Worker are set with `wrangler secret put <NAME>`, never in a
+file.
+
+## First administrator
+
+The admin UI cannot create the first administrator (creating users
+requires an admin), so seed one after setup:
+
+```bash
+npm run seed-admin
+```
+
+Interactive prompts (password hidden) or flags:
+`npm run seed-admin -- --login admin --email you@example.com`.
+It refuses when an administrator already exists. For a deployed site:
+`npm run seed-admin -- --remote` (needs `wrangler whoami` first).
 
 ## Verifying your install
 
 ```bash
-npm test        # 29 tests, in-memory SQLite (never a live D1)
-npm run build   # tsc --noEmit, strict mode
+npm test        # 416 tests, in-memory SQLite (never a live D1)
+npm run build   # admin SPA build + tsc --noEmit, strict mode
 ```
 
 ## Updating

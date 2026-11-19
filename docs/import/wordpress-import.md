@@ -10,6 +10,10 @@ Both run as admin-only `wl_jobs` jobs and produce a per-item report
 > WordPress *plugin or theme* is not imported here — converting code
 > is the M4 conversion engine's job.
 
+![Admin Import page](../screenshots/admin-import.png)
+*The admin Import page — WXR and SQL-dump import, with the synthetic
+test fixtures linked for a trial run.*
+
 ## Formats
 
 | Format | Endpoint | Limit | Parser |

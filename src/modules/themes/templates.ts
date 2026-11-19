@@ -11,13 +11,17 @@
  * post-date, post-terms, query-title, query-pagination, search, group,
  * columns, column, and every content block render/blocks.ts already knows
  * (paragraph, heading, list, quote, image, code, separator, spacer).
- * `pattern` blocks are recorded, not rendered (patterns are registered
- * fragments; rendering them is out of scope for v1). `post-featured-image`
- * renders nothing — Wordless has no featured-image assignment yet.
- * Unknown blocks render their inner HTML unchanged, same policy as M2.
+ * `pattern` blocks are rendered from the theme's `patterns/<name>.php`
+ * files (M10 — see patterns.ts): the leading PHP header is stripped and
+ * the block HTML is rendered; any further PHP refuses the pattern.
+ * `post-featured-image` renders nothing — Wordless has no featured-image
+ * assignment yet. Unknown blocks render their inner HTML unchanged, same
+ * policy as M2.
  */
 import { escapeHtml } from "../render/theme";
 import { parseBlocks, renderBlock, type Block } from "../render/blocks";
+import { extractPatternHtml, findPatternFile } from "./patterns";
+import { evaluatePatternPhp } from "./pattern-php";
 
 export type TemplateKind = "home" | "single" | "page" | "archive" | "search" | "404" | "index";
 
@@ -240,6 +244,11 @@ interface RenderState {
   files: Map<string, string>;
   depth: number;
   warnings: string[];
+  /** Patterns currently being rendered (cycle guard — a pattern that
+   * references itself, directly or through another pattern, renders once). */
+  activePatterns: Set<string>;
+  /** True once the theme-asset-URI warning has been recorded for this render. */
+  assetUriWarned: boolean;
 }
 
 function toContentBlock(block: TemplateBlock): Block {
@@ -342,10 +351,56 @@ function renderTemplateBlock(block: TemplateBlock, ctx: TemplateContext, state: 
       return paginationHtml(ctx);
     case "search":
       return `<form role="search" method="get" action="/search" class="wp-block-search"><label>Search <input type="search" name="q" value="${escapeHtml(ctx.query ?? "")}"></label> <button type="submit">Search</button></form>`;
-    case "pattern":
-      // Patterns are registered fragments, not executed in v1.
-      state.warnings.push(`Pattern "${typeof attrs.slug === "string" ? attrs.slug : ""}" recorded but not rendered (v1).`);
-      return "";
+    case "pattern": {
+      const slug = typeof attrs.slug === "string" ? attrs.slug : "";
+      if (slug === "") {
+        state.warnings.push("Pattern block without a slug renders nothing.");
+        return "";
+      }
+      if (state.depth >= 5) {
+        state.warnings.push(`Pattern "${slug}" skipped: nesting too deep.`);
+        return "";
+      }
+      if (state.activePatterns.has(slug)) {
+        state.warnings.push(`Pattern "${slug}" skipped: it references itself (cycle).`);
+        return "";
+      }
+      const found = findPatternFile(state.files, slug);
+      if (found === null) {
+        state.warnings.push(`Pattern "${slug}" not found in the theme (patterns/${slug.split("/").pop() ?? ""}.php).`);
+        return "";
+      }
+      const html = extractPatternHtml(found.source);
+      if (html === null) {
+        state.warnings.push(`Pattern "${slug}" is empty.`);
+        return "";
+      }
+      // Inline PHP in the pattern (i18n/escaping calls only) is evaluated
+      // by the allowlisted evaluator; anything else refuses the pattern.
+      const evaluated = evaluatePatternPhp(html, {
+        onAssetUri: () => {
+          if (!state.assetUriWarned) {
+            state.assetUriWarned = true;
+            state.warnings.push(
+              "Theme asset URLs (get_template_directory_uri) are not served yet — image sources built from them are empty.",
+            );
+          }
+        },
+      });
+      if (evaluated === null) {
+        state.warnings.push(
+          `Pattern "${slug}" not rendered: its file contains PHP outside the allowlisted i18n/escaping calls (never executed).`,
+        );
+        return "";
+      }
+      state.activePatterns.add(slug);
+      try {
+        const inner = parseTemplateBlocks(evaluated);
+        return renderBlocks(inner, ctx, { ...state, depth: state.depth + 1 });
+      } finally {
+        state.activePatterns.delete(slug);
+      }
+    }
     case "group":
     case "columns":
     case "column": {
@@ -397,7 +452,7 @@ export function renderTemplateFile(
   if (source === undefined) {
     return { html: "", warnings: [`Template "${name}" not found in the theme.`] };
   }
-  const state: RenderState = { files, depth: 0, warnings: [] };
+  const state: RenderState = { files, depth: 0, warnings: [], activePatterns: new Set(), assetUriWarned: false };
   const blocks = parseTemplateBlocks(source);
   return { html: renderBlocks(blocks, ctx, state), warnings: state.warnings };
 }

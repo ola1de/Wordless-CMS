@@ -6,6 +6,9 @@ require a second factor, and sessions expire when idle. Nothing here
 is a veneer — each check reports what it measured, and anything not
 verified says so.
 
+![Admin Security page](../screenshots/admin-security.png)
+*The admin Security page — headers, lockout, two-factor authentication.*
+
 ## Security headers
 
 Every response — API, public pages, admin SPA assets, cached copies,

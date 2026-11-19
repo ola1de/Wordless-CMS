@@ -1,4 +1,4 @@
-# WORDLESS — Architecture (Milestone 9 summary)
+# WORDLESS — Architecture (Version 1.0.0)
 
 The full design lives in `../docs/02-architecture.md` (system diagram,
 technology choices with reasons, D1 schema v1, kernel, module boundaries,
@@ -10,12 +10,12 @@ file is a one-page pointer plus the Milestone 3 module map.
 
 - **Runtime:** Cloudflare Workers (TypeScript, no PHP anywhere in production)
 - **Database:** Cloudflare D1 (SQLite) — 12 WordPress-shaped `wp_*` tables + `wl_*` tables
-- **Storage:** Cloudflare R2 (media objects — real uploads in M3; no image derivatives yet, Phase 7)
+- **Storage:** Cloudflare R2 (media objects — real uploads in M3; image derivatives via the Images binding when bound, originals otherwise, M9)
 - **Config:** Cloudflare KV (rare reads; never secrets)
 - **Admin:** React SPA (Vite → Static Assets, `admin/dist/admin/`, served at `/admin`); the M2 server-rendered shell (`src/admin-shell.ts`) was removed in M3
 - **Tests:** Vitest + Node 24 `node:sqlite` (D1 is SQLite, so schema + SQL tests run locally)
 
-## Milestone 4 module map
+## Milestone 4 module map (updated for 1.0.0 — M5–M10 modules added)
 
 ```
 src/index.ts            Worker entry: fetch handler, route table, session resolution,
@@ -76,9 +76,19 @@ src/modules/
   health/               site-health checks (real, per-check pass/fail)
   activity/             wl_audit_log writes + admin-only list
 src/compat/
-  wordpress.ts          41-function WP registry (full/partial/stub, honestly tagged);
-                        M4 adds get_user_locale, get_locale, __, _e, esc_html,
-                        esc_attr, wptexturize (partial)
+  wordpress.ts          45-function WP registry (full/partial/stub, honestly tagged)
+                        + AI/SEO/commerce/integrations/security/performance/
+                        backup/import lists (M6–M9); M4 adds get_user_locale,
+                        get_locale, __, _e, esc_html, esc_attr, wptexturize
+                        (partial)
+src/modules/
+  ai/                   (M6) orchestrator, approvals, memory — see "AI system"
+  integrations/         (M8) registry, email, analytics, social, marketplace
+  commerce/             (M8) products, cart, checkout, orders, payments
+  security/             (M9) headers, lockout, TOTP 2FA, sessions, magic bytes
+  performance/          (M9) cache rules + purge, image derivatives
+  backup/               (M9) backup create/verify/restore (ZIP + checksums)
+  importer/             (M9) WXR + SQL-dump importer, safe PHP unserialize
 src/test/
   test-db.ts            In-memory SQLite + migration runner (tests only)
   fake-storage.ts       In-memory MediaStorage (tests only)
@@ -101,15 +111,28 @@ admin/
   src/editor/           Gutenberg block parser/serializer + round-trip tests
   src/pages/            Dashboard, Posts, Editor, Media, Terms, Comments,
                         Menus, Users, Settings, Site Health, Activity, Login,
-                        Conversion (M4)
+                        Conversion (M4), ThemeEditor (M5), CommandCentre (M6),
+                        Seo + Studio (M7), Commerce + Integrations (M8),
+                        Security + Backup + Import (M9)
 migrations/
   0001_init.sql         D1 schema v1 (12 wp_* + 6 wl_* tables)
   0002_m2.sql           wl_redirects + M2 indexes
                         (No 0003: M3 needed no schema change.
                          No 0004: M4 stores job reports in wl_jobs.result.)
+  0005_m5.sql           wl_themes (M5)
+  0006_m6.sql           wl_ai_approvals + wl_ai_memory (M6)
+  0007_m7.sql           wl_404_log (M7)
+  0008_m8.sql           products/orders/carts/mail/webhook tables (M8)
+  0009_m9.sql           login attempts, backups, media derivatives (M9)
+                        (No 0010: M10 needed no schema change — seed uses
+                         existing users tables; environments are config.)
 scripts/
   install.mjs           Interactive installer wizard (Node built-ins only)
-  deploy.mjs            Production deploy guard (--confirm + whoami required)
+  deploy.mjs            Deploy guard: pre-deploy checks + --confirm + whoami,
+                        --env staging|production (M10)
+  seed-admin.mjs        First-administrator seed (M10)
+  generate-default-theme.mjs   regenerates the default-theme.ts bundle (M5)
+  generate-wp-fixture.mjs      generates test/fixtures/wordpress/ (M9)
 ```
 
 ## Conversion pipeline (M4)
@@ -240,6 +263,13 @@ src/modules/themes/
   stylesheet, and runs each `.php` file through the M4 analyser for a
   per-file convertible/partial/blocked report. No PHP is executed; no
   template is converted in v1.
+- **Patterns (M10).** `wp:pattern` blocks render the theme's
+  `patterns/<name>.php` file (header stripped, block HTML rendered
+  through the template renderer). Inline PHP in a pattern is evaluated
+  by an allowlisted literal evaluator (`pattern-php.ts`: twelve
+  i18n/escaping calls, string literals only — nothing executed, anything
+  else refuses the pattern). Verified against the real Twenty
+  Twenty-Five theme.
 - **Limits.** `fflate` is a bundled dependency (unzipSync/zipSync) and
   fits the Workers limits; ZIPs are capped at 5 MB and extracted in
   memory in the request (local dev). A production-scale import of a very
@@ -632,6 +662,52 @@ src/modules/importer/* ──▶ WXR (fast-xml-parser) + SQL dump parser + safe 
   `BACKUP_COMPAT` (3), `IMPORT_COMPAT` (3) in
   `src/compat/wordpress.ts`; `AI_COMPAT`'s `wl_ai_agents` entry now
   says the scanner/analyst/advisor are wired to real checks.
+
+## Production readiness (M10)
+
+- **First-administrator seed.** `src/modules/auth/seed.ts`
+  (`validateSeedInput` / `adminExists` / `seedAdmin`) is the
+  service-level half: it validates (login 1–60 chars, email, password
+  8–200, confirmation match), refuses when an administrator already
+  exists, and creates the admin through the normal `createUser` (PBKDF2
+  via WebCrypto, `wp_capabilities` JSON). `scripts/seed-admin.mjs` is
+  the CLI half: interactive prompts (password hidden) or flags, local D1
+  by default, `--remote` only after `wrangler whoami` succeeds plus a
+  confirmation. The CLI hashes with Node `crypto.pbkdf2Sync` in the
+  identical format and writes the same two rows via
+  `wrangler d1 execute` (a temp SQL file, deleted afterwards); the
+  smoke test proves the two paths agree by logging in with the seeded
+  admin. No password is printed or logged anywhere.
+- **Block-pattern rendering.** `src/modules/themes/patterns.ts`
+  resolves a slug to `patterns/<name>.php` (`.html` fallback) and strips
+  the leading PHP header; `src/modules/themes/pattern-php.ts` evaluates
+  inline PHP with a tokenizer + recursive-descent parser over the
+  literal text — twelve allowlisted i18n/escaping functions, string
+  literals and concatenation only. No variables, no control flow, no
+  file access, no `eval`; anything else returns null and the renderer
+  refuses the pattern with a warning. `templates.ts` renders the
+  extracted block HTML through the normal template renderer with a
+  shared depth budget (5, with template parts) and a cycle guard
+  (`activePatterns` set). `get_template_directory_uri()` returns ""
+  (no public theme-asset URL yet) and records one warning per render.
+- **Environments.** `wrangler.toml` `[env.staging]` and
+  `[env.production]` are separate Workers (`wordless-staging` /
+  `wordless-prod`) with separate D1 databases and R2 buckets; the
+  top-level bindings stay the local-dev defaults. `scripts/deploy.mjs`
+  runs tests + build + setup check first, requires `--confirm` and a
+  successful `whoami`, then applies remote migrations and deploys with
+  `--env <name>` and verifies `/api/health`. The installer provisions
+  the production resources into the `[env.production]` blocks (never
+  the top-level ones) and offers the seed step after local setup.
+  Promotion is dev → staging → production (see `docs/release.md`).
+- **Release management.** `CHANGELOG.md` (one section per release with
+  test counts and pushed SHAs, never invented) and `docs/release.md`
+  (tagging, checklist, rollback via `wrangler rollback` or redeploying
+  the previous commit). Version lives in two places — `package.json`
+  and the `VERSION` constant in `src/index.ts` — and they must match.
+- **No new migration.** M10 needed no schema change: the seed uses the
+  existing users tables, patterns use the theme files already stored in
+  R2, and environments are configuration in `wrangler.toml`.
 
 ## Key decisions (see `../docs/02-architecture.md` §10 for the log)
 
