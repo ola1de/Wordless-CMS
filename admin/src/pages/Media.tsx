@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { formatBytes, formatDateTime } from "../lib/format";
-import type { MediaItem, MediaList } from "../lib/types";
+import type { DerivativeStatus, MediaItem, MediaList } from "../lib/types";
 import { EmptyState, ErrorBox, Modal, Pagination, Spinner } from "../components/ui";
 
 export function MediaPage(): React.ReactElement {
@@ -13,6 +13,7 @@ export function MediaPage(): React.ReactElement {
   const [uploading, setUploading] = useState(false);
   const [editing, setEditing] = useState<MediaItem | null>(null);
   const [altDraft, setAltDraft] = useState("");
+  const [derivatives, setDerivatives] = useState<DerivativeStatus | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -27,6 +28,21 @@ export function MediaPage(): React.ReactElement {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<DerivativeStatus>("/api/media/derivatives")
+      .then((d) => {
+        if (!cancelled) setDerivatives(d);
+      })
+      .catch(() => {
+        // Derivatives status is informational; a failure here never blocks the library.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const upload = async (file: File): Promise<void> => {
     setUploading(true);
@@ -69,6 +85,13 @@ export function MediaPage(): React.ReactElement {
     <div>
       {error ? <ErrorBox message={error} onDismiss={() => setError(null)} /> : null}
       {notice ? <div className="notice">{notice}</div> : null}
+      {derivatives ? (
+        <p className="muted">
+          {derivatives.bound
+            ? `Image derivatives are available (Cloudflare Images bound; ${derivatives.stored} variant(s) stored; widths ${derivatives.widths.join(", ")}). Use ?width=&format= on a media URL.`
+            : "Image derivatives are unavailable until the Cloudflare Images binding is configured (see wrangler.toml) — media URLs serve the original file."}
+        </p>
+      ) : null}
       <div className="toolbar">
         <select value={mime} onChange={(e) => { setMime(e.target.value); setPage(1); }} aria-label="Filter by type">
           <option value="">All types</option>

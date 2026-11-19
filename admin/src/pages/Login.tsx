@@ -5,6 +5,8 @@ import type { User } from "../lib/types";
 export function LoginPage({ onLoggedIn }: { onLoggedIn: (user: User) => void }): React.ReactElement {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [needsTotp, setNeedsTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -13,10 +15,15 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (user: User) => void }):
     setError(null);
     setBusy(true);
     try {
-      const { user } = await api.login(login.trim(), password);
+      const { user } = await api.login(login.trim(), password, needsTotp ? totp.trim() : undefined);
       onLoggedIn(user);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed. Please try again.");
+      if (err instanceof ApiError && err.status === 401 && err.message.includes("Two-factor")) {
+        setNeedsTotp(true);
+        setError("Two-factor authentication is enabled for this account — enter the 6-digit code from your authenticator app (or a recovery code).");
+      } else {
+        setError(err instanceof ApiError ? err.message : "Login failed. Please try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -50,6 +57,19 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (user: User) => void }):
               required
             />
           </div>
+          {needsTotp ? (
+            <div className="field">
+              <label htmlFor="login-totp">Authenticator code (or recovery code)</label>
+              <input
+                id="login-totp"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={totp}
+                onChange={(e) => setTotp(e.target.value)}
+                required
+              />
+            </div>
+          ) : null}
           <button type="submit" className="primary" disabled={busy} style={{ width: "100%" }}>
             {busy ? "Signing in…" : "Log in"}
           </button>

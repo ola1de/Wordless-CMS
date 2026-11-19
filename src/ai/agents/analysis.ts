@@ -4,15 +4,22 @@
  * These agents do NOT need a provider: they measure the site's real data
  * (posts, comments, users, media, themes, conversion reports) and report
  * only what they measured. Nothing here is invented — a check that finds
- * nothing says so, and a recommendation names the milestone that will
- * deliver it (e.g. real SEO fixes in M7, backups in M9).
+ * nothing says so.
+ *
+ * Milestone 9: the security-scanner now runs the real M9 security checks
+ * (headers policy, lockout state, 2FA per admin, upload allowlist, the
+ * default "admin" login name) via the security service, and the
+ * performance-analyst now measures real numbers from D1/R2 and the
+ * performance service (cache config, derivative status, content sizes).
+ * The backup-advisor reports the real backup registry, and the
+ * migration-assistant points at the real M9 importer.
  */
 import { queryOne } from "../../db";
 import { getOption } from "../../modules/options/service";
 import { listComments } from "../../modules/comments/service";
 import { listConversionJobs } from "../../modules/conversion/service";
 import { listExtensions } from "../../modules/extensions/service";
-import { listMedia } from "../../modules/media/service";
+import { listMedia, ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES } from "../../modules/media/service";
 import { getPermalinkStructure } from "../../modules/permalinks/service";
 import { listPosts } from "../../modules/posts/service";
 import { analyzePostSeo } from "../../modules/seo/analyze";
@@ -22,6 +29,10 @@ import { getThemeDetail } from "../../modules/themes/service";
 import { getActiveThemeSlug } from "../../modules/themes/service";
 import { R2MediaStorage } from "../../modules/media/storage";
 import { listUsers } from "../../modules/users/service";
+import { getSecurityOverview } from "../../modules/security/service";
+import { securityHeaders } from "../../modules/security/headers";
+import { getPerformanceHealth } from "../../modules/performance/service";
+import { listBackups } from "../../modules/backup/service";
 import type { AgentContext, AgentDefinition, AgentResult } from "../types";
 
 const SAMPLE = 50;
@@ -101,14 +112,22 @@ export const securityScanner: AgentDefinition = {
   id: "security-scanner",
   name: "Security Scanner",
   description:
-    "Checks measurable security posture: how many administrators exist, how many sessions are active, and how many comments are waiting or marked spam. It does not guess at password strength (hashes are opaque) and does not invent vulnerabilities.",
-  capabilities: ["Count administrators and active sessions", "Count pending and spam comments"],
+    "Runs the real Milestone 9 security checks: the security-headers policy applied to every response, login lockout configuration and currently locked keys, two-factor status per administrator, the upload allowlist in force, and whether a user with the default login name \"admin\" exists (login name only — passwords are never tested). It does not guess at password strength (hashes are opaque) and does not invent vulnerabilities.",
+  capabilities: [
+    "Check security headers, lockout and 2FA status",
+    "Check the upload allowlist and the default admin login",
+    "Count administrators, active sessions, pending and spam comments",
+  ],
   risk: "low",
   requiresProvider: false,
   async run(ctx: AgentContext): Promise<AgentResult> {
     const { db } = ctx;
+    const overview = await getSecurityOverview(db);
+    const headers = securityHeaders();
+    const headerNames = headers.map(([name]) => name);
     const users = await listUsers(db, { page: 1, perPage: 100 });
     const admins = count(users.users, (u) => u.role === "administrator");
+    const adminsWith2fa = overview.twoFactor.filter((a) => a.enabled).length;
     const now = new Date().toISOString();
     const sessions = await queryOne<{ n: number }>(
       db,
@@ -118,15 +137,37 @@ export const securityScanner: AgentDefinition = {
     const pending = await listComments(db, { status: "pending", page: 1, perPage: 1 });
     const spam = await listComments(db, { status: "spam", page: 1, perPage: 1 });
     const findings = [
+      `Security headers applied to every response: ${headerNames.join(", ")} (CSP is ${overview.headers.policy.length} characters; the policy allows inline styles/scripts the admin and analytics need — see docs/security/security.md).`,
+      `Login lockout: ${overview.lockout.config.maxAttempts} failed attempts in ${overview.lockout.config.windowMinutes} minutes locks a login name/IP for ${overview.lockout.config.lockoutMinutes} minutes (doubling on consecutive lockouts, capped at 60). ${overview.lockout.lockedKeys.length} key(s) currently locked.`,
+      `Two-factor authentication: ${adminsWith2fa} of ${overview.twoFactor.length} administrator(s) have TOTP enabled.`,
+      `Upload allowlist in force: ${[...ALLOWED_MIME_TYPES].join(", ")} (max ${MAX_UPLOAD_BYTES / 1024 / 1024} MB) plus magic-byte sniffing.`,
+      overview.defaultAdminLoginExists
+        ? "A user with the default login name \"admin\" exists — rename it (passwords are never tested by this check)."
+        : "No user with the default login name \"admin\" exists.",
       `${users.total} users in total; ${admins} administrator${admins === 1 ? "" : "s"}.`,
       `${sessions?.n ?? 0} active sessions.`,
       `${pending.total} comments awaiting moderation; ${spam.total} marked spam.`,
-      admins > 3 ? "More than 3 administrators — review who really needs the role." : "Administrator count looks reasonable.",
+      overview.twoFactor.length > 0 && adminsWith2fa < overview.twoFactor.length
+        ? "Not every administrator has two-factor authentication enabled."
+        : "Every administrator has two-factor authentication enabled, or there are no administrators.",
     ];
     return {
-      summary: `Security scan: ${admins} administrators, ${sessions?.n ?? 0} active sessions, ${pending.total} comments pending, ${spam.total} spam.`,
+      summary: `Security scan: headers on, lockout ${overview.lockout.config.maxAttempts}/${overview.lockout.config.windowMinutes}min, 2FA ${adminsWith2fa}/${overview.twoFactor.length} admins, ${sessions?.n ?? 0} active sessions, ${pending.total} comments pending, ${spam.total} spam.`,
       output: findings.join("\n"),
-      data: { users: users.total, administrators: admins, activeSessions: sessions?.n ?? 0, pendingComments: pending.total, spamComments: spam.total },
+      data: {
+        users: users.total,
+        administrators: admins,
+        administratorsWith2fa: adminsWith2fa,
+        activeSessions: sessions?.n ?? 0,
+        pendingComments: pending.total,
+        spamComments: spam.total,
+        headers: headerNames,
+        lockout: overview.lockout.config,
+        lockedKeys: overview.lockout.lockedKeys.length,
+        uploadAllowlist: [...ALLOWED_MIME_TYPES],
+        maxUploadBytes: MAX_UPLOAD_BYTES,
+        defaultAdminLoginExists: overview.defaultAdminLoginExists,
+      },
     };
   },
 };
@@ -135,38 +176,61 @@ export const performanceAnalyst: AgentDefinition = {
   id: "performance-analyst",
   name: "Performance Analyst",
   description:
-    "Measures content volume that drives page weight and database size: posts, revisions, media files and total media bytes, comments. Recommendations are generic until Core Web Vitals measurement arrives in Milestone 9.",
-  capabilities: ["Count posts, revisions, media and comments", "Total media bytes"],
+    "Measures real numbers from D1 and R2: post and revision counts, media files and total media bytes, comments, average and largest post content size, public-page cache configuration, image-derivative status, and R2 object count. Cache hit rates are NOT observable from inside the Worker, so the agent says so instead of inventing a number. Core Web Vitals (real-user timing) are not measured by the Worker.",
+  capabilities: [
+    "Count posts, revisions, media and comments",
+    "Total media bytes and R2 object count",
+    "Cache configuration and image-derivative status",
+    "Average and largest post content size",
+  ],
   risk: "low",
   requiresProvider: false,
   async run(ctx: AgentContext): Promise<AgentResult> {
-    const { db } = ctx;
+    const { db, env } = ctx;
+    const health = await getPerformanceHealth(db, env);
     const posts = await listPosts(db, { status: "publish", type: "post", page: 1, perPage: 1 });
     const revisions = await queryOne<{ n: number }>(
       db,
       "SELECT COUNT(*) AS n FROM wp_posts WHERE post_type = 'revision'",
     );
+    const contentSize = await queryOne<{ avg: number | null; max: number | null }>(
+      db,
+      "SELECT AVG(LENGTH(post_content)) AS avg, MAX(LENGTH(post_content)) AS max FROM wp_posts WHERE post_type IN ('post', 'page') AND post_status = 'publish'",
+    );
     const media = await listMedia(db, { page: 1, perPage: 100 });
     const mediaBytes = media.media.reduce((n, m) => n + m.size, 0);
     const comments = await listComments(db, { page: 1, perPage: 1 });
+    const avgChars = contentSize?.avg === null || contentSize?.avg === undefined ? null : Math.round(contentSize.avg);
     const findings = [
-      `${posts.total} published posts.`,
-      `${revisions?.n ?? 0} revisions stored.`,
-      `${media.total} media files (${media.media.length} sampled), ${mediaBytes} bytes in the sample.`,
+      `${posts.total} published posts; ${revisions?.n ?? 0} revisions stored.`,
+      `${media.total} media files (${media.media.length} sampled), ${mediaBytes} bytes in the sample; R2 holds ${health.mediaObjects.counted} object(s)${health.mediaObjects.capped ? " (count capped at 1,000 — at least this many)" : ""}.`,
       `${comments.total} comments in total.`,
+      avgChars === null
+        ? "No published posts to measure content size."
+        : `Published post/page content: average ${avgChars} characters, largest ${contentSize?.max ?? 0} characters.`,
+      `Public-page cache: anonymous GETs cached ${health.cache.maxAgeSeconds}s with stale-while-revalidate ${health.cache.staleWhileRevalidateSeconds}s; publishing purges the post URL, home and affected term pages.`,
+      `Image derivatives: ${health.derivatives.bound ? "Cloudflare Images is bound" : "Cloudflare Images is NOT bound — the media endpoint serves originals"}; ${health.derivatives.stored} derivative(s) stored.`,
+      "Cache hit rate is not observable from inside the Worker — no hit/miss figure is reported.",
       (revisions?.n ?? 0) > 100
-        ? "Over 100 revisions — pruning old revisions (Milestone 9) would shrink the database."
+        ? "Over 100 revisions — pruning old revisions would shrink the database."
         : "Revision count is modest.",
     ];
     return {
-      summary: `Performance snapshot: ${posts.total} posts, ${revisions?.n ?? 0} revisions, ${media.total} media files, ${comments.total} comments.`,
+      summary: `Performance snapshot: ${posts.total} posts, ${revisions?.n ?? 0} revisions, ${media.total} media files (${mediaBytes} bytes sampled), ${comments.total} comments; cache ${health.cache.maxAgeSeconds}s; derivatives ${health.derivatives.bound ? "bound" : "unbound"}.`,
       output: findings.join("\n"),
       data: {
         posts: posts.total,
         revisions: revisions?.n ?? 0,
         mediaFiles: media.total,
         mediaBytesSampled: mediaBytes,
+        r2Objects: health.mediaObjects.counted,
+        r2ObjectsCapped: health.mediaObjects.capped,
         comments: comments.total,
+        averageContentChars: avgChars,
+        largestContentChars: contentSize?.max ?? null,
+        cache: health.cache,
+        derivatives: health.derivatives,
+        tables: health.tables,
       },
     };
   },
@@ -240,8 +304,8 @@ export const backupAdvisor: AgentDefinition = {
   id: "backup-advisor",
   name: "Backup Advisor",
   description:
-    "Sizes what a backup would need to cover (posts, media files and bytes, users, comments) and recommends a cadence. Real backup export and restore arrive in Milestone 9 — this agent advises, it does not back anything up.",
-  capabilities: ["Size the site's content", "Recommend a backup cadence"],
+    "Sizes what a backup would need to cover (posts, media files and bytes, users, comments), reports the real backup registry (how many backups exist, when the latest was verified), and recommends a cadence. Backup export, verification and restore are built in (Milestone 9) — this agent advises, it does not back anything up.",
+  capabilities: ["Size the site's content", "Report backup registry state", "Recommend a backup cadence"],
   risk: "low",
   requiresProvider: false,
   async run(ctx: AgentContext): Promise<AgentResult> {
@@ -251,16 +315,22 @@ export const backupAdvisor: AgentDefinition = {
     const mediaBytes = media.media.reduce((n, m) => n + m.size, 0);
     const users = await listUsers(db, { page: 1, perPage: 1 });
     const comments = await listComments(db, { page: 1, perPage: 1 });
+    const backups = await listBackups(db);
+    const verified = backups.filter((b) => b.verified).length;
+    const latest = backups[0];
     const cadence = posts.total > 50 || media.total > 100 ? "daily" : "weekly";
     const findings = [
       `Content to protect: ${posts.total} posts/pages, ${media.total} media files (${mediaBytes} bytes sampled), ${users.total} users, ${comments.total} comments.`,
+      `Backups on record: ${backups.length} (${verified} verified).`,
+      latest === undefined
+        ? "No backup has been created yet — create one from the admin Backup page."
+        : `Latest backup: ${latest.id} (${latest.size} bytes, ${Object.keys(latest.tables).length} tables, ${latest.mediaCount} media files) created ${latest.createdAt}${latest.verified ? `, verified ${latest.verifiedAt ?? "unknown"}` : " — NOT verified yet; run verify before relying on it"}.`,
       `Recommended backup cadence: ${cadence}.`,
-      "Automated backup export and restore arrive in Milestone 9. Until then, export content regularly from the admin and keep media copies off-site.",
     ];
     return {
-      summary: `Backup advice: ${posts.total} posts/pages and ${media.total} media files to protect; ${cadence} backups recommended.`,
+      summary: `Backup advice: ${posts.total} posts/pages and ${media.total} media files to protect; ${backups.length} backup(s) on record (${verified} verified); ${cadence} backups recommended.`,
       output: findings.join("\n"),
-      data: { posts: posts.total, mediaFiles: media.total, mediaBytesSampled: mediaBytes, users: users.total, comments: comments.total, recommendedCadence: cadence },
+      data: { posts: posts.total, mediaFiles: media.total, mediaBytesSampled: mediaBytes, users: users.total, comments: comments.total, recommendedCadence: cadence, backups: backups.length, verifiedBackups: verified, latestBackupId: latest?.id ?? null, latestBackupVerified: latest?.verified ?? false },
     };
   },
 };
@@ -269,7 +339,7 @@ export const migrationAssistant: AgentDefinition = {
   id: "migration-assistant",
   name: "Migration Assistant",
   description:
-    "Reports migration readiness: how much content a WordPress import would need to carry, and what the conversion engine has already converted. The WordPress importer itself (WXR + database) arrives in Milestone 9.",
+    "Reports migration readiness: how much content a WordPress import would need to carry, and what the conversion engine has already converted. The WordPress importer (WXR + database dump) is built in — see the admin Import page and docs/import/wordpress-import.md.",
   capabilities: ["Count importable content", "Summarise past conversions"],
   risk: "low",
   requiresProvider: false,
@@ -285,7 +355,7 @@ export const migrationAssistant: AgentDefinition = {
     const lines = [
       `Content on this site: ${posts.total} posts/pages, ${comments.total} comments, ${users.total} users, ${media.total} media files.`,
       `Conversion engine history: ${jobs.total} jobs (${done} done, ${failed} failed).`,
-      "Readiness: export a WordPress WXR file from the source site when the Milestone 9 importer lands; plugin/theme conversion is handled by the conversion engine (Milestone 4) first.",
+      "Readiness: export a WordPress WXR file (or a mysqldump of the 12 wp_* tables) from the source site and upload it on the admin Import page; plugin/theme conversion is handled by the conversion engine (Milestone 4) first. Imported users get a forced password reset — WordPress phpass hashes are not portable.",
     ];
     return {
       summary: `Migration readiness: ${posts.total} posts/pages, ${comments.total} comments, ${users.total} users, ${media.total} media files; ${done} past conversions done.`,

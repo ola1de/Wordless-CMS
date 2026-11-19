@@ -1,4 +1,4 @@
-# WORDLESS — Architecture (Milestone 8 summary)
+# WORDLESS — Architecture (Milestone 9 summary)
 
 The full design lives in `../docs/02-architecture.md` (system diagram,
 technology choices with reasons, D1 schema v1, kernel, module boundaries,
@@ -517,6 +517,121 @@ src/index.ts  /api/commerce/*  +  /api/integrations/*  +  /api/marketplace/*  + 
 - **Compat.** `COMMERCE_COMPAT` (8 entries) and `INTEGRATIONS_COMPAT`
   (6 entries) in `src/compat/wordpress.ts`; `AI_COMPAT`'s
   `wl_ai_agents` entry now says the commerce-assistant is live.
+
+## Security, performance, backup, importer (M9)
+
+```
+Admin #/security (Security.tsx)   Admin #/backup   Admin #/import
+   │  headers / lockout / 2FA /     │  create / list / verify /      │  WXR + SQL upload
+   │  sessions / failed logins      │  download / restore (RESTORE)  │  job progress + report
+   ▼                               ▼                                ▼
+src/modules/security/* ──▶ wl_login_attempts (lockout), wl_2fa_* usermeta, wl_sessions.last_seen_at
+src/modules/performance/* ──▶ Cache API purge on publish; IMAGES binding → wl_media_derivatives
+src/modules/backup/* ──▶ R2 backups/<id>.zip (fflate) + wl_backups registry
+src/modules/importer/* ──▶ WXR (fast-xml-parser) + SQL dump parser + safe PHP unserializer
+```
+
+- **Headers on every response.** `withSecurityHeaders` wraps the
+  whole `fetch()` handler in `src/index.ts` — API responses, public
+  pages, admin SPA assets, cached hits (headers are set before
+  `cache.put`), and error responses. The CSP is
+  `default-src 'self'` + `script-src 'self' 'unsafe-inline'` +
+  the analytics domains (Google Tag Manager / Analytics, Plausible)
+  + `frame-ancestors 'none'` + `object-src 'none'`. `unsafe-inline`
+  is deliberate and documented (M2 layout inlines `<style>`, pages
+  inline JSON-LD, the GA snippet is inline) — a nonce-based CSP is a
+  later step.
+- **Lockout.** `recordLoginFailure` / `isLoginLocked` in
+  `lockout.ts` count per-login-name (`login:<name>`) and per-IP-hash
+  (`ip:<sha256>`) in `wl_login_attempts`. Defaults 5 failures / 15-min
+  window / 15-min lockout; consecutive lockouts double (15→30→60,
+  capped 60). A successful login deletes the counters. Thresholds are
+  options, read through `getSecuritySettings`. The login route
+  (`loginWithSecurity`) checks the lockout before the password, and
+  returns 429 `locked_out` — failures never reveal whether the
+  password was right.
+- **TOTP.** `totp.ts` is a pure RFC 6238 implementation (HMAC-SHA1,
+  30 s steps, 6 digits, ±1 step skew, base32 secrets, verified
+  against the RFC vector T=59 s → `287082`). Secrets are stored in
+  usermeta (`wl_2fa_secret` / `wl_2fa_pending_secret`) — D1 access is
+  the trust boundary, documented in `service.ts`. A secret is only
+  promoted from pending to active after a valid code confirms setup;
+  the 8 recovery codes are 10 chars (`XXXXX-XXXXX`), stored as
+  SHA-256 hashes (`wl_2fa_recovery_hashes`), one-time use. Disabling
+  2FA requires the account password and revokes every session.
+- **Sessions.** `verifySession` enforces the idle timeout (option
+  `wl_session_idle_hours`, default 24 h) and refreshes `last_seen_at`
+  at most once per 5 minutes. `listUserSessions` never returns token
+  values. `POST /api/auth/sessions/revoke-all` revokes every session
+  including the caller's (the caller gets a cleared cookie).
+- **Uploads.** `verifyUploadBytes` runs after the M3 allowlist check
+  in `uploadMedia` — JPEG/PNG/GIF/WebP/AVIF/PDF by magic bytes, SVG by
+  content (must start with `<svg`, rejects `<script`, `javascript:`
+  and inline event handlers), and rejects any extension/MIME mismatch.
+- **Performance.** `publicCacheControl()` is `public, max-age=60,
+  stale-while-revalidate=60`. `purgeUrls` uses the real `caches.default`
+  API; publishing a post purges its URL + home + its category/tag
+  URLs (best-effort, never fails the publish). Derivatives call the
+  real Cloudflare Images binding API (`input(...).transform({width,
+  fit: "scale-down"}).output({format})`) when bound; variants are
+  stored in R2 `media/derivatives/<id>-<width>.<format>` and recorded
+  in `wl_media_derivatives` for `srcset`. When the binding is absent
+  the service returns `{kind: "unavailable"}` and the media endpoint
+  serves the original with `X-Wordless-Derivatives: unavailable`.
+  Compression is the edge's job — the Worker sets `Vary:
+  Accept-Encoding` and documents the split; it never claims
+  compression it does not provide.
+- **Backup.** `createBackup` zips one JSON file per D1 table (all
+  except `wl_backups` and `wl_jobs`, documented exclusion), a media
+  manifest (R2 keys + sizes + etags — R2 gives no SHA-256), and a
+  `manifest.json` (`wordless-backup/1`, per-file SHA-256 — the
+  manifest itself is not checksummed, since it holds the checksums).
+  `verifyBackup` re-reads the bundle from R2 and recomputes every
+  checksum; only then is `verified` set. `restoreBackup` requires the
+  typed confirmation `RESTORE`, refuses a failed verification and a
+  different minor version, restores tables in dependency order in
+  batched transactions (`Db.batch()` — D1 batch in production,
+  BEGIN IMMEDIATE/COMMIT in node:sqlite tests), checks the media
+  manifest key-by-key (missing keys are reported, never silently
+  skipped), and writes an audit entry. Retention keeps the 10 most
+  recent (option `wl_backup_retention`), pruned on create.
+- **Importer.** `php-serialize.ts` is a strict safe unserializer:
+  scalars and arrays only; `O:`/`C:` objects and `r:`/`R:`
+  references are refused with `PhpUnserializeError`; a string shaped
+  like a serialized value is parsed strictly (unknown types throw),
+  anything else passes through unchanged. `sql-parser.ts` splits
+  mysqldump statements respecting quotes and comments (comment text
+  is dropped before `^INSERT` matching), parses `INSERT INTO <table>
+  [(cols)] VALUES (...)` with MySQL escapes, and only the 12 `wp_*`
+  tables have canonical column orders — other tables are reported as
+  ignored and their VALUES are never parsed. `wxr-parser.ts` uses
+  `fast-xml-parser` (CDATA preserved, namespaced tags kept). Importers
+  keep original IDs when free (else remap), map statuses (`inherit`
+  on attachments → publish, anything unknown → draft with a note),
+  remap parents in a second pass, refresh `comment_count`, and
+  record every item in the per-item report. Imported users get an
+  empty password + `wl_password_reset_required` — phpass hashes are
+  not portable, so the old password can never work. `runImportJob`
+  reads the uploaded file from R2 `imports/<jobId>-<filename>`; the
+  attachment fetcher uses global `fetch` and records a failure per
+  item (never silently drops it).
+- **Agents.** `src/ai/agents/analysis.ts` — the security-scanner calls
+  `getSecurityOverview` + `securityHeaders()` + the media allowlist;
+  the performance-analyst calls `getPerformanceHealth` + D1/R2 counts
+  and content sizes; the backup-advisor reads `listBackups`; the
+  migration-assistant points at the importer. Every number an agent
+  reports comes from a live query; cache hit rate is reported as not
+  observable, never invented.
+- **Schema.** Migration `0009_m9.sql` (additive only) adds
+  `wl_login_attempts`, `wl_backups`, `wl_media_derivatives`, and
+  `last_seen_at` on `wl_sessions`. `REQUIRED_TABLES` in the health
+  service and `src/test/test-db.ts` cover them. `src/env.ts` gains an
+  optional `IMAGES?: ImagesBinding` (commented `[images]` block in
+  `wrangler.toml` with setup instructions and a pricing warning).
+- **Compat.** `SECURITY_COMPAT` (7), `PERFORMANCE_COMPAT` (3),
+  `BACKUP_COMPAT` (3), `IMPORT_COMPAT` (3) in
+  `src/compat/wordpress.ts`; `AI_COMPAT`'s `wl_ai_agents` entry now
+  says the scanner/analyst/advisor are wired to real checks.
 
 ## Key decisions (see `../docs/02-architecture.md` §10 for the log)
 

@@ -3,10 +3,16 @@
  * 32 bytes, base64url-encoded; only its SHA-256 hash is stored, so a
  * database read alone cannot impersonate a user. Sessions are revocable
  * and expire (default 7 days).
+ *
+ * Milestone 9: sessions also have an idle timeout (configurable via the
+ * `wl_session_idle_hours` option, default 24 h). A session idle longer
+ * than that is revoked on its next use. `last_seen_at` is updated at
+ * most once every 5 minutes, so verification stays cheap.
  */
 import { execRun, nowIso, queryOne } from "../../db";
 import type { Db } from "../../db";
 import { checkUserPassword, getUserById } from "../users/service";
+import { getOption } from "../options/service";
 import type { User } from "../users/types";
 
 export interface Session {
@@ -15,9 +21,21 @@ export interface Session {
   tokenHash: string;
   createdAt: string;
   expiresAt: string;
+  lastSeenAt: string | null;
   ipHash: string | null;
   userAgent: string | null;
   revoked: boolean;
+}
+
+export const DEFAULT_SESSION_IDLE_HOURS = 24;
+const LAST_SEEN_WRITE_MINUTES = 5;
+
+/** Idle timeout in hours (option wl_session_idle_hours, default 24). */
+export async function getSessionIdleHours(db: Db): Promise<number> {
+  const hours = await getOption<number>(db, "wl_session_idle_hours", DEFAULT_SESSION_IDLE_HOURS);
+  return typeof hours === "number" && Number.isFinite(hours) && hours > 0
+    ? hours
+    : DEFAULT_SESSION_IDLE_HOURS;
 }
 
 export interface SessionOptions {
@@ -52,6 +70,7 @@ function rowToSession(row: SessionRow): Session {
     tokenHash: typeof row.token_hash === "string" ? row.token_hash : "",
     createdAt: typeof row.created_at === "string" ? row.created_at : "",
     expiresAt: typeof row.expires_at === "string" ? row.expires_at : "",
+    lastSeenAt: typeof row.last_seen_at === "string" ? row.last_seen_at : null,
     ipHash: typeof row.ip_hash === "string" ? row.ip_hash : null,
     userAgent: typeof row.user_agent === "string" ? row.user_agent : null,
     revoked: Number(row.revoked ?? 0) === 1,
@@ -73,20 +92,22 @@ export async function createSession(
     tokenHash,
     createdAt: now.toISOString(),
     expiresAt: expires.toISOString(),
+    lastSeenAt: now.toISOString(),
     ipHash: opts.ipHash ?? null,
     userAgent: opts.userAgent ?? null,
     revoked: false,
   };
   await execRun(
     db,
-    `INSERT INTO wl_sessions (id, user_id, token_hash, created_at, expires_at, ip_hash, user_agent, revoked)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    `INSERT INTO wl_sessions (id, user_id, token_hash, created_at, expires_at, last_seen_at, ip_hash, user_agent, revoked)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       session.id,
       session.userId,
       session.tokenHash,
       session.createdAt,
       session.expiresAt,
+      session.lastSeenAt,
       session.ipHash,
       session.userAgent,
     ],
@@ -94,7 +115,12 @@ export async function createSession(
   return { token, session };
 }
 
-export async function verifySession(db: Db, token: string): Promise<Session | null> {
+/**
+ * Verify a session token. Enforces the absolute expiry AND the idle
+ * timeout (default 24 h since last use); an idle-timed-out session is
+ * revoked. `last_seen_at` is refreshed at most once every 5 minutes.
+ */
+export async function verifySession(db: Db, token: string, nowMs = Date.now()): Promise<Session | null> {
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await queryOne<SessionRow>(
@@ -104,7 +130,18 @@ export async function verifySession(db: Db, token: string): Promise<Session | nu
   );
   if (!row) return null;
   const session = rowToSession(row);
-  if (session.expiresAt <= nowIso()) return null;
+  const now = new Date(nowMs).toISOString();
+  if (session.expiresAt <= now) return null;
+  const idleHours = await getSessionIdleHours(db);
+  const lastSeenMs = session.lastSeenAt !== null ? new Date(session.lastSeenAt).getTime() : new Date(session.createdAt).getTime();
+  if (nowMs - lastSeenMs > idleHours * 60 * 60 * 1000) {
+    await execRun(db, "UPDATE wl_sessions SET revoked = 1 WHERE id = ?", [session.id]);
+    return null;
+  }
+  if (nowMs - lastSeenMs > LAST_SEEN_WRITE_MINUTES * 60 * 1000) {
+    await execRun(db, "UPDATE wl_sessions SET last_seen_at = ? WHERE id = ?", [now, session.id]);
+    session.lastSeenAt = now;
+  }
   return session;
 }
 

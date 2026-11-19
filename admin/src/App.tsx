@@ -20,6 +20,9 @@ import { SeoPage } from "./pages/Seo";
 import { StudioPage } from "./pages/Studio";
 import { CommercePage } from "./pages/Commerce";
 import { IntegrationsPage } from "./pages/Integrations";
+import { SecurityPage } from "./pages/Security";
+import { BackupPage } from "./pages/Backup";
+import { ImportPage } from "./pages/Import";
 
 export interface AppSettings {
   timezone: string;
@@ -46,6 +49,9 @@ const NAV: Array<{ hash: string; label: string }> = [
   { hash: "#/studio", label: "Content Studio" },
   { hash: "#/commerce", label: "Commerce" },
   { hash: "#/integrations", label: "Integrations" },
+  { hash: "#/security", label: "Security" },
+  { hash: "#/backup", label: "Backup" },
+  { hash: "#/import", label: "Import" },
 ];
 
 function routeFromHash(): string {
@@ -220,6 +226,15 @@ export function App(): React.ReactElement {
       break;
     case "integrations":
       page = <IntegrationsPage />;
+      break;
+    case "security":
+      page = <SecurityPage />;
+      break;
+    case "backup":
+      page = <BackupPage />;
+      break;
+    case "import":
+      page = <ImportPage />;
       break;
     case "dashboard":
     default:

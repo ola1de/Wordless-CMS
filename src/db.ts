@@ -10,6 +10,13 @@ export interface DbStatement {
 
 export interface Db {
   prepare(sql: string): DbStatement;
+  /**
+   * Run statements atomically where the platform supports it (D1 batch
+   * is one transaction; node:sqlite wraps BEGIN/COMMIT). Used by the
+   * M9 backup restore. Callers must chunk large statement lists
+   * themselves (D1 limits a batch).
+   */
+  batch(statements: Array<{ sql: string; params?: unknown[] }>): Promise<void>;
 }
 
 class D1Statement implements DbStatement {
@@ -46,6 +53,9 @@ export function adaptD1(d1: D1Database): Db {
   return {
     prepare(sql: string): DbStatement {
       return new D1Statement(d1.prepare(sql));
+    },
+    async batch(statements: Array<{ sql: string; params?: unknown[] }>): Promise<void> {
+      await d1.batch(statements.map((s) => d1.prepare(s.sql).bind(...(s.params ?? []))));
     },
   };
 }

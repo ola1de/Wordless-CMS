@@ -96,10 +96,10 @@ export const api = {
   me(): Promise<{ user: User }> {
     return request<{ user: User }>("/api/auth/me");
   },
-  login(login: string, password: string): Promise<{ user: User }> {
+  login(login: string, password: string, totp?: string): Promise<{ user: User }> {
     return request<{ user: User }>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ login, password }),
+      body: JSON.stringify({ login, password, ...(totp !== undefined ? { totp } : {}) }),
     });
   },
   logout(): Promise<{ loggedOut: boolean }> {

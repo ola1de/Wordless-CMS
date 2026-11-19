@@ -25,7 +25,7 @@ import {
 import { isProviderId } from "./ai/providers/types";
 import { AI_MODE_DESCRIPTIONS } from "./ai/types";
 import { createWordPressApi } from "./compat/wordpress";
-import { adaptD1, nowIso } from "./db";
+import { adaptD1, execRun, nowIso, queryOne } from "./db";
 import type { Db } from "./db";
 import type { Env } from "./env";
 import { WordlessError } from "./kernel/errors";
@@ -45,8 +45,8 @@ import { installExtension, listExtensions } from "./modules/extensions/service";
 import {
   buildSessionCookie,
   clearSessionCookie,
-  login as loginUser,
   parseSessionCookie,
+  revokeAllSessionsForUser,
   revokeSession,
   userFromSession,
 } from "./modules/auth/service";
@@ -182,13 +182,36 @@ import { getSettings, updateSettings } from "./modules/settings/service";
 import {
   createUser,
   deleteUser,
+  deleteUserMeta,
   listUsers,
   resetUserPassword,
   setUserRole,
 } from "./modules/users/service";
 import { isRole } from "./modules/users/capabilities";
+import { withSecurityHeaders } from "./modules/security/headers";
+import {
+  confirmTotp,
+  disableTotp,
+  getSecurityOverview,
+  hashIp,
+  isTotpEnabled,
+  listUserSessions,
+  loginWithSecurity,
+  PASSWORD_RESET_META_KEY,
+  setupTotp,
+} from "./modules/security/service";
+import { getDerivativeOrOriginal, derivativeStatus } from "./modules/performance/derivatives";
+import { publicCacheControl, purgeUrls, urlsToPurgeForPost } from "./modules/performance/cache";
+import {
+  getBackupDownload,
+  listBackups,
+  restoreBackup,
+  runBackupJob,
+  verifyBackup,
+} from "./modules/backup/service";
+import { runImportJob } from "./modules/importer/service";
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 
 /**
  * Pinned upstream source for each conversion fixture. Fixtures fetch from
@@ -211,7 +234,7 @@ function parseIdParam(value: string | undefined, field: string): number {
   return n;
 }
 
-async function log(db: Db, user: AuthUser | null, action: string, objectType: string, objectId: number): Promise<void> {
+async function log(db: Db, user: AuthUser | null, action: string, objectType: string, objectId: number | string): Promise<void> {
   try {
     await logActivity(db, { actorId: user?.id ?? 0, action, objectType, objectId });
   } catch {
@@ -243,6 +266,28 @@ async function notifyAdminOfComment(
     });
   } catch {
     // Notifications are best-effort.
+  }
+}
+
+/**
+ * Milestone 9: publishing (or changing) a post purges its URL, the home
+ * page and its term pages from the edge cache. A purge failure never
+ * fails the publish — the entry expires on its own after 60 s.
+ */
+async function purgePostFromCache(
+  db: Db,
+  request: Request,
+  post: { id: number; slug: string; status: string },
+): Promise<void> {
+  if (post.status !== "publish") return;
+  try {
+    const cache = (caches as unknown as { default: Cache }).default;
+    const origin = new URL(request.url).origin;
+    const terms = await getPostTerms(db, post.id);
+    const slugs = terms.map((t) => t.slug);
+    await purgeUrls(cache, urlsToPurgeForPost(origin, post.slug, slugs));
+  } catch {
+    // Purge failures are best-effort (see the helper's doc comment).
   }
 }
 
@@ -299,6 +344,7 @@ function buildRouter(): Router {
         authorId: user?.id ?? 0,
       });
       await log(db, user, "post.create", "post", post.id);
+      await purgePostFromCache(db, request, post);
       return jsonOk(post, 201);
     },
     { capability: "edit_posts" },
@@ -320,6 +366,7 @@ function buildRouter(): Router {
         parentId: body.parentId as number | undefined,
       });
       await log(db, user, "post.update", "post", post.id);
+      await purgePostFromCache(db, request, post);
       return jsonOk(post);
     },
     { capability: "edit_posts" },
@@ -814,6 +861,18 @@ function buildRouter(): Router {
     { capability: "upload_files" },
   );
 
+  // NOTE: this static route is registered BEFORE "/api/media/:id" below —
+  // the router matches in registration order, and ":id" would swallow
+  // "derivatives" otherwise.
+  router.get(
+    "/api/media/derivatives",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await derivativeStatus(db, env.IMAGES !== undefined && env.IMAGES !== null));
+    },
+    { capability: "upload_files" },
+  );
+
   router.get(
     "/api/media/:id",
     async ({ env, params }) => {
@@ -850,21 +909,43 @@ function buildRouter(): Router {
   );
 
   // Serve a stored object: GET /media/<object-key> (flat keys, no slashes).
-  router.get("/media/:key", async ({ env, params }) => {
+  // Milestone 9: ?width=&format= asks Cloudflare Images for a resized
+  // variant. When Images is not bound the original is served and the
+  // response says so (X-Wordless-Derivatives: unavailable) — a resize is
+  // never faked.
+  router.get("/media/:key", async ({ env, url, params }) => {
     const db = adaptD1(env.DB);
     const key = params.key ?? "";
     const record = await findMediaByKey(db, key);
     if (!record) throw new WordlessError("not_found", 404, "Media file not found.");
+    const widthParam = url.searchParams.get("width");
+    const formatParam = url.searchParams.get("format");
+    const width = widthParam === null ? null : Number(widthParam);
+    const format =
+      formatParam === null ? null : (formatParam as "webp" | "jpeg" | "png");
+    const outcome = await getDerivativeOrOriginal(env, db, record.id, key, width, format);
+    if (outcome.kind === "derivative") {
+      const derived = await new R2MediaStorage(env.MEDIA).get(outcome.objectKey);
+      if (derived === null) throw new WordlessError("not_found", 404, "Media file not found.");
+      return new Response(derived.data as unknown as BodyInit, {
+        status: 200,
+        headers: {
+          "Content-Type": `image/${outcome.format}`,
+          "Cache-Control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
     const stored = await new R2MediaStorage(env.MEDIA).get(key);
     if (!stored) throw new WordlessError("not_found", 404, "Media file not found.");
-    return new Response(stored.data as unknown as BodyInit, {
-      status: 200,
-      headers: {
-        "Content-Type": record.mimeType,
-        // Object keys are UUID-prefixed and immutable: cache aggressively.
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type": record.mimeType,
+      // Object keys are UUID-prefixed and immutable: cache aggressively.
+      "Cache-Control": "public, max-age=31536000, immutable",
+    };
+    if (outcome.kind === "unavailable") {
+      headers["X-Wordless-Derivatives"] = "unavailable";
+    }
+    return new Response(stored.data as unknown as BodyInit, { status: 200, headers });
   });
 
   // ------------------------------------------------------------ conversion (M4)
@@ -1834,15 +1915,42 @@ function buildRouter(): Router {
   });
 
   // -------------------------------------------------------------------- auth
+  // Milestone 9: login goes through the guarded flow — lockout, forced
+  // password reset (imported users), then TOTP. Every failure is a
+  // generic 401; only the lockout and the TOTP-required states are
+  // distinguished, because the admin UI needs them to prompt correctly.
   router.post("/api/auth/login", async ({ request, env }) => {
     const db = adaptD1(env.DB);
     const body = await readJsonBody<Record<string, unknown>>(request);
     const loginName = requireString(body.login, "login", { max: 60 });
     const password = requireString(body.password, "password", { max: 200 });
-    const result = await loginUser(db, loginName, password, {
+    const totp = typeof body.totp === "string" ? body.totp : undefined;
+    const ip = request.headers.get("CF-Connecting-IP") ?? undefined;
+    const result = await loginWithSecurity(db, {
+      loginName,
+      password,
+      totp,
+      ipHash: ip !== undefined ? await hashIp(ip) : undefined,
       userAgent: request.headers.get("User-Agent") ?? undefined,
     });
-    if (!result) {
+    if (result.kind === "locked") {
+      throw new WordlessError(
+        "locked_out",
+        429,
+        `Too many failed login attempts. Try again after ${result.lockedUntil}.`,
+      );
+    }
+    if (result.kind === "totp_required") {
+      throw new WordlessError("totp_required", 401, "Two-factor authentication is required for this account.");
+    }
+    if (result.kind === "reset_required") {
+      throw new WordlessError(
+        "password_reset_required",
+        403,
+        "This account was imported from WordPress and needs a password reset before it can sign in. Ask an administrator to reset the password.",
+      );
+    }
+    if (result.kind === "invalid") {
       // Deliberately generic: do not reveal whether the login or password was wrong.
       throw new WordlessError("unauthorized", 401, "Invalid login or password.");
     }
@@ -1859,6 +1967,237 @@ function buildRouter(): Router {
     response.headers.set("Set-Cookie", buildSessionCookie(result.token));
     return response;
   });
+
+  router.get(
+    "/api/auth/2fa/status",
+    async ({ env, user }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk({ enabled: await isTotpEnabled(db, user!.id) });
+    },
+    { requireAuth: true },
+  );
+
+  router.post(
+    "/api/auth/2fa/setup",
+    async ({ env, user }) => {
+      const db = adaptD1(env.DB);
+      const setup = await setupTotp(db, user!.id, user!.login);
+      await log(db, user, "auth.2fa_setup_started", "user", user!.id);
+      return jsonOk(setup);
+    },
+    { requireAuth: true },
+  );
+
+  router.post(
+    "/api/auth/2fa/confirm",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const code = requireString(body.code, "code", { max: 12 });
+      // Recovery codes are returned ONCE here — the admin must store them
+      // somewhere safe; they are never shown again.
+      const result = await confirmTotp(db, user!.id, code);
+      await log(db, user, "auth.2fa_enabled", "user", user!.id);
+      return jsonOk(result);
+    },
+    { requireAuth: true },
+  );
+
+  router.post(
+    "/api/auth/2fa/disable",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const password = requireString(body.password, "password", { max: 200 });
+      const result = await disableTotp(db, user!.id, password);
+      await log(db, user, "auth.2fa_disabled", "user", user!.id);
+      // Disabling 2FA signs the user out everywhere, including this session.
+      const response = jsonOk(result);
+      response.headers.set("Set-Cookie", clearSessionCookie());
+      return response;
+    },
+    { requireAuth: true },
+  );
+
+  router.get(
+    "/api/auth/sessions",
+    async ({ request, env, user }) => {
+      const db = adaptD1(env.DB);
+      const token = parseSessionCookie(request.headers.get("Cookie"));
+      return jsonOk(await listUserSessions(db, user!.id, token ?? undefined));
+    },
+    { requireAuth: true },
+  );
+
+  router.post(
+    "/api/auth/sessions/revoke-all",
+    async ({ env, user }) => {
+      const db = adaptD1(env.DB);
+      const revoked = await revokeAllSessionsForUser(db, user!.id);
+      await log(db, user, "auth.sessions_revoked", "user", user!.id);
+      const response = jsonOk({ revoked });
+      response.headers.set("Set-Cookie", clearSessionCookie());
+      return response;
+    },
+    { requireAuth: true },
+  );
+
+  router.get(
+    "/api/security/overview",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await getSecurityOverview(db));
+    },
+    { capability: "manage_options" },
+  );
+
+  // ------------------------------------------------------------ backup (M9)
+  // A backup is a real ZIP in R2 (backups/<id>.zip) with one JSON file
+  // per D1 table, a media manifest and a manifest with SHA-256 checksums
+  // per file. It is only "verified" after verifyBackup re-reads the
+  // bundle and recomputes every checksum. Restore needs the typed
+  // confirmation string "RESTORE" and refuses a failed verification.
+  router.post(
+    "/api/backup/create",
+    async ({ env, user }) => {
+      const db = adaptD1(env.DB);
+      const jobId = crypto.randomUUID();
+      const now = nowIso();
+      await execRun(
+        db,
+        "INSERT INTO wl_jobs (id, kind, status, payload, result, attempts, created_at, updated_at) VALUES (?, 'backup_create', 'queued', ?, NULL, 0, ?, ?)",
+        [jobId, JSON.stringify({ createdBy: user?.id ?? 0 }), now, now],
+      );
+      await runBackupJob(db, env, jobId, VERSION);
+      const job = await queryOne<Record<string, unknown>>(db, "SELECT * FROM wl_jobs WHERE id = ? LIMIT 1", [jobId]);
+      await log(db, user, "backup.create", "backup", jobId);
+      return jsonOk({ id: jobId, status: job?.status, result: job?.result !== null && typeof job?.result === "string" ? JSON.parse(job.result) : null }, 201);
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/backup",
+    async ({ env }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await listBackups(db));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/backup/:id/download",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const download = await getBackupDownload(db, env, params.id ?? "");
+      return new Response(download.bytes as unknown as BodyInit, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="${download.filename}"`,
+          "Content-Length": String(download.size),
+        },
+      });
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/backup/:id/verify",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      return jsonOk(await verifyBackup(db, env, params.id ?? ""));
+    },
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/backup/:id/restore",
+    async ({ request, env, user, params }) => {
+      const db = adaptD1(env.DB);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
+      const report = await restoreBackup(db, env, params.id ?? "", confirmation, VERSION, user?.id ?? 0);
+      return jsonOk(report);
+    },
+    { capability: "manage_options" },
+  );
+
+  // ------------------------------------------------------------ import (M9)
+  // WXR and mysqldump imports run as wl_jobs jobs. The uploaded file is
+  // stored in R2 under imports/ first (never in D1); the job payload
+  // holds its key. 10 MB cap, admin-only. The file is data only — the
+  // importer parses XML/SQL, it never executes imported code.
+  const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+
+  async function startImportJob(
+    request: Request,
+    env: Env,
+    user: AuthUser | null,
+    kind: "import_wxr" | "import_sql",
+  ): Promise<Response> {
+    const db = adaptD1(env.DB);
+    const contentType = request.headers.get("Content-Type") ?? "";
+    if (!contentType.includes("multipart/form-data")) {
+      throw new WordlessError("bad_request", 400, 'Import requires a multipart "file" field.');
+    }
+    const form = await request.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      throw new WordlessError("bad_request", 400, 'Import requires a multipart "file" field.');
+    }
+    if (file.size > MAX_IMPORT_BYTES) {
+      throw new WordlessError("bad_request", 400, "Import file is too large (10 MB maximum).");
+    }
+    const jobId = crypto.randomUUID();
+    const r2Key = `imports/${jobId}-${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    await env.MEDIA.put(r2Key, new Uint8Array(await file.arrayBuffer()), {
+      httpMetadata: { contentType: file.type || "application/octet-stream" },
+    });
+    const now = nowIso();
+    await execRun(
+      db,
+      "INSERT INTO wl_jobs (id, kind, status, payload, result, attempts, created_at, updated_at) VALUES (?, ?, 'queued', ?, NULL, 0, ?, ?)",
+      [jobId, kind, JSON.stringify({ r2Key, filename: file.name }), now, now],
+    );
+    await runImportJob(db, env, jobId, user?.id ?? 0);
+    const job = await queryOne<Record<string, unknown>>(db, "SELECT * FROM wl_jobs WHERE id = ? LIMIT 1", [jobId]);
+    await log(db, user, "import.start", "job", jobId);
+    return jsonOk(
+      { id: jobId, kind, status: job?.status, result: job?.result !== null && typeof job?.result === "string" ? JSON.parse(job.result) : null },
+      201,
+    );
+  }
+
+  router.post(
+    "/api/import/wxr",
+    async ({ request, env, user }) => startImportJob(request, env, user, "import_wxr"),
+    { capability: "manage_options" },
+  );
+
+  router.post(
+    "/api/import/sql",
+    async ({ request, env, user }) => startImportJob(request, env, user, "import_sql"),
+    { capability: "manage_options" },
+  );
+
+  router.get(
+    "/api/import/jobs/:id",
+    async ({ env, params }) => {
+      const db = adaptD1(env.DB);
+      const job = await queryOne<Record<string, unknown>>(db, "SELECT * FROM wl_jobs WHERE id = ? LIMIT 1", [params.id ?? ""]);
+      if (job === null) throw new WordlessError("not_found", 404, "Import job not found.");
+      return jsonOk({
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        result: job.result !== null && typeof job.result === "string" ? JSON.parse(job.result) : null,
+        createdAt: job.created_at,
+        updatedAt: job.updated_at,
+      });
+    },
+    { capability: "manage_options" },
+  );
 
   router.post(
     "/api/auth/logout",
@@ -1986,6 +2325,9 @@ function buildRouter(): Router {
       // The temporary password is returned ONCE in this response. It is
       // never logged and never stored in plaintext (only the hash is).
       const { user: updated, temporaryPassword } = await resetUserPassword(db, id);
+      // Milestone 9: a reset clears the imported-user forced-reset flag,
+      // so the user can sign in with the temporary password.
+      await deleteUserMeta(db, id, PASSWORD_RESET_META_KEY);
       await log(db, user, "user.password_reset", "user", id);
       // M8: email the temporary password when the email integration can
       // send; in test mode it is only logged in wl_mail_log. `emailed`
@@ -2433,7 +2775,7 @@ export default {
       // The admin SPA lives under /admin and is served from Static Assets
       // before any routing — API and public-site routes never reach it.
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-        return serveAdmin(request, env);
+        return withSecurityHeaders(await serveAdmin(request, env));
       }
 
       // Anonymous public GETs are cacheable; never cache API/admin/logged-in traffic.
@@ -2450,7 +2792,7 @@ export default {
           // declare it, so it is reached through a narrow cast.
           const cache = (caches as unknown as { default: Cache }).default;
           const cached = await cache.match(request);
-          if (cached) return cached;
+          if (cached) return withSecurityHeaders(cached);
         } catch {
           // Cache API unavailable (e.g. some local runtimes) — serve uncached.
         }
@@ -2477,8 +2819,12 @@ export default {
       if (cacheable && response.status === 200) {
         try {
           const headers = new Headers(response.headers);
-          headers.set("Cache-Control", "public, max-age=60");
-          const cacheableResponse = new Response(response.body, { status: response.status, headers });
+          // Milestone 9: 60 s + stale-while-revalidate (see performance/cache.ts).
+          headers.set("Cache-Control", publicCacheControl());
+          // Security headers go on before caching, so the cached copy carries them.
+          const cacheableResponse = withSecurityHeaders(
+            new Response(response.body, { status: response.status, headers }),
+          );
           const cache = (caches as unknown as { default: Cache }).default;
           await cache.put(request, cacheableResponse.clone());
           return cacheableResponse;
@@ -2486,13 +2832,13 @@ export default {
           // Cache write failures must not break the response.
         }
       }
-      return response;
+      return withSecurityHeaders(response);
     } catch (err) {
       if (err instanceof WordlessError) {
-        return jsonError(err.code, err.status, err.message);
+        return withSecurityHeaders(jsonError(err.code, err.status, err.message));
       }
       console.error("Unhandled worker error", err);
-      return jsonError("internal_error", 500, "An unexpected error occurred.");
+      return withSecurityHeaders(jsonError("internal_error", 500, "An unexpected error occurred."));
     }
   },
 };

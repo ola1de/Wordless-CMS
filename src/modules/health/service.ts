@@ -6,6 +6,7 @@
 import { queryOne } from "../../db";
 import type { Db } from "../../db";
 import type { Env } from "../../env";
+import { getPerformanceHealth } from "../performance/service";
 
 export interface HealthCheck {
   name: string;
@@ -44,6 +45,9 @@ const REQUIRED_TABLES = [
   "wl_carts",
   "wl_mail_log",
   "wl_webhook_log",
+  "wl_login_attempts",
+  "wl_backups",
+  "wl_media_derivatives",
 ];
 
 export async function siteHealth(db: Db, env: Env, version: string): Promise<SiteHealth> {
@@ -128,6 +132,28 @@ export async function siteHealth(db: Db, env: Env, version: string): Promise<Sit
     status: "pass",
     detail: `Wordless ${version}; D1/SQLite backend.`,
   });
+
+  // 6. Performance (Milestone 9) — measured numbers, never invented.
+  try {
+    const perf = await getPerformanceHealth(db, env);
+    checks.push({
+      name: "performance",
+      status: "pass",
+      detail: [
+        `${perf.tables.wp_posts ?? 0} posts, ${perf.tables.wp_users ?? 0} users, ${perf.tables.wp_comments ?? 0} comments, ${perf.tables.wl_products ?? 0} products, ${perf.tables.wl_orders ?? 0} orders`,
+        `R2: ${perf.mediaObjects.counted} object(s)${perf.mediaObjects.capped ? " (count capped at 1,000)" : ""}`,
+        `public cache: anonymous GETs ${perf.cache.maxAgeSeconds}s + stale-while-revalidate ${perf.cache.staleWhileRevalidateSeconds}s`,
+        `image derivatives: ${perf.derivatives.bound ? "Images bound" : "Images NOT bound — originals served"} (${perf.derivatives.stored} stored)`,
+        `backups on record: ${perf.tables.wl_backups ?? 0}`,
+      ].join("; ") + ".",
+    });
+  } catch (err) {
+    checks.push({
+      name: "performance",
+      status: "fail",
+      detail: `Performance section failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 
   return { status: checks.some((c) => c.status === "fail") ? "degraded" : "ok", version, checks };
 }

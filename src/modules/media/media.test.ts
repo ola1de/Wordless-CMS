@@ -104,7 +104,13 @@ describe("media service with fake R2", () => {
       const storage = new InMemoryMediaStorage();
       const author = await createUser(db, { login: "ed", email: "ed@example.com", password: "password-123" });
       await uploadMedia(db, storage, { filename: "a.png", mimeType: "image/png", data: PNG, authorId: author.id });
-      await uploadMedia(db, storage, { filename: "b.pdf", mimeType: "application/pdf", data: PNG, authorId: author.id });
+      await uploadMedia(db, storage, {
+        filename: "b.pdf",
+        mimeType: "application/pdf",
+        // Real PDF magic bytes (M9 magic-byte sniffing rejects PNG bytes labelled PDF).
+        data: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]),
+        authorId: author.id,
+      });
       expect((await listMedia(db, {})).total).toBe(2);
       expect((await listMedia(db, { mimeType: "image/png" })).total).toBe(1);
       expect((await listMedia(db, { mimeType: "application/pdf" })).media[0]?.filename).toBe("b.pdf");

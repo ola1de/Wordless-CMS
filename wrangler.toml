@@ -54,6 +54,15 @@ id = "REPLACE-ME"
 # optionally OPENAI_BASE_URL / OPENAI_MODEL. Without the secret the
 # provider reports "not configured".
 
+# Image derivatives (Milestone 9) — Cloudflare Images binding.
+# OPTIONAL and COMMENTED OUT because no Cloudflare account is connected
+# yet: uncomment it when deploying to Cloudflare (wrangler login first).
+# Images is a paid add-on on some plans — check the Cloudflare Images
+# pricing before enabling. Without the binding the media endpoint serves
+# originals and the admin media page reports derivatives as unavailable.
+# [images]
+# binding = "IMAGES"
+
 # Integrations + commerce (Milestone 8) — secrets only, no wrangler.toml
 # entries needed. Set them on the deployed Worker with `wrangler secret
 # put <NAME>` (never in this file, never in code, never in D1):

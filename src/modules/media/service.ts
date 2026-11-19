@@ -9,8 +9,10 @@
  * - _wp_attached_file: the R2 object key (e.g. "a1b2c3-photo.jpg")
  * - _wp_attachment_metadata: JSON { filename, size, alt }
  *
- * Documented gap (M3): no image derivatives / WebP conversion — originals
- * only. See storage.ts.
+ * Documented gap (M3, resolved in M9): image derivatives / WebP
+ * conversion now exist via the Cloudflare Images binding — see
+ * src/modules/performance/derivatives.ts. When the binding is absent,
+ * originals only.
  */
 import { execRun, queryAll, queryOne } from "../../db";
 import type { Db } from "../../db";
@@ -18,6 +20,7 @@ import { badRequest, notFound } from "../../kernel/errors";
 import { createPost, deletePost, getPostById } from "../posts/service";
 import { rowToPost } from "../posts/repo";
 import type { Post } from "../posts/types";
+import { verifyUploadBytes } from "../security/magic";
 import type { MediaStorage } from "./storage";
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -170,6 +173,9 @@ export async function uploadMedia(
 ): Promise<MediaRecord> {
   validateUpload(input.mimeType, input.data.byteLength);
   const filename = safeFilename(input.filename);
+  // Milestone 9: magic-byte sniffing — a PHP script renamed to .jpg is
+  // rejected here, before any bytes reach R2.
+  verifyUploadBytes(filename, input.mimeType, input.data);
   const key = objectKeyFor(filename);
   const title = input.title?.trim() || filename;
   const stored = await storage.put(key, input.data, input.mimeType);

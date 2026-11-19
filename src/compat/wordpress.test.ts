@@ -23,7 +23,7 @@ describe("media compat functions (M3)", () => {
       const record = await api.media_handle_upload({
         filename: "pic.png",
         mimeType: "image/png",
-        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
         authorId: author.id,
       });
       expect(record.url).toMatch(/^\/media\//);

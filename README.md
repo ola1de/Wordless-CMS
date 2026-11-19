@@ -10,7 +10,7 @@ autonomous AI command layer on top (later milestones).
 
 One platform. One intelligent command centre. Complete website management.
 
-> **Status: Milestone 8 — integrations + commerce (built, in verification).** The kernel, D1
+> **Status: Milestone 9 — security + performance + backup + WordPress importer (built, in verification).** The kernel, D1
 > schema, auth, posts/users/options/media APIs, revisions, terms, comments,
 > menus, search, permalinks, public rendering, feeds, sitemap, site health,
 > activity log, compat registry, the React admin SPA with a Gutenberg
@@ -25,15 +25,22 @@ One platform. One intelligent command centre. Complete website management.
 > studio + SEO engine (per-post SEO fields, head tags with JSON-LD,
 > deterministic SEO analysis, sitemap with images + pagination,
 > configurable robots.txt, redirect manager, 404 log, editorial calendar,
-> content templates, Yoast/Rank Math metadata import), and now
-> integrations + commerce (integration registry, transactional email,
+> content templates, Yoast/Rank Math metadata import), integrations +
+> commerce (integration registry, transactional email,
 > Paystack / Flutterwave / Stripe with real HMAC webhook verification
 > plus a test-mode mock, products / cart / checkout / orders with
 > integer minor-unit money, the commerce-assistant wired to real store
 > data, social share links, analytics config, and the marketplace
-> skeleton) are built and tested. Backup, WordPress import and
-> production readiness are **not built yet** — see
-> [What M8 is not](#what-milestone-8-is-not) below. Nothing unfinished is
+> skeleton), and now security hardening + performance (security headers
+> on every response, login lockout, TOTP two-factor, session idle
+> timeout, magic-byte upload sniffing, public-page cache rules with
+> purge-on-publish, Cloudflare Images derivatives when bound, a
+> performance section in Site Health), real backup/restore (ZIP bundles
+> with per-file SHA-256 checksums, verification, typed-confirmation
+> restore) and the WordPress importer (WXR + mysqldump, safe PHP
+> unserializing, forced password reset for imported users) are built
+> and tested. Production readiness is **not built yet** — see
+> [What M9 is not](#what-milestone-9-is-not) below. Nothing unfinished is
 > presented as done.
 
 ## Requirements
@@ -896,6 +903,145 @@ served from `/` (home), `/{slug}` (posts/pages), `/category/{slug}`,
   M5 known gap, unchanged.
 - **Not backup or import.** Real backup/restore and the WordPress
   (WXR) importer are Milestone 9; production readiness is Milestone 10.
+
+## What Milestone 9 is
+
+- **Security headers** (`src/modules/security/headers.ts`). Every
+  response — API, public pages, admin assets, cached copies, error
+  responses — carries Content-Security-Policy, X-Content-Type-Options:
+  nosniff, X-Frame-Options: DENY, Referrer-Policy and
+  Permissions-Policy, plus `Vary: Accept-Encoding`. The CSP allows the
+  inline styles/scripts the admin SPA, JSON-LD and the analytics
+  snippet need; the `unsafe-inline` rationale is documented in
+  `docs/security/security.md` (a nonce-based policy is a later step).
+- **Login lockout** (`src/modules/security/lockout.ts`). Per-login-name
+  and per-IP attempt counting in D1 `wl_login_attempts` (IPs stored as
+  SHA-256 hashes only). Defaults: 5 failed attempts in 15 minutes locks
+  for 15 minutes, doubling on consecutive lockouts (capped at 60). A
+  successful login clears the counter. Thresholds are options
+  (`wl_security_max_attempts`, `wl_security_window_minutes`,
+  `wl_security_lockout_minutes`). A locked login returns 429.
+- **TOTP two-factor** (`src/modules/security/totp.ts`,
+  `service.ts`). RFC 6238 over HMAC-SHA1, 30-second steps, ±1 step of
+  skew, 20-byte base32 secrets. `POST /api/auth/2fa/setup` (secret
+  stored as *pending*, returned once as an otpauth:// URL + manual
+  code), `/confirm` (stores the secret only after a valid code, returns
+  8 one-time **hashed** recovery codes), `/disable` (needs the account
+  password, signs the user out everywhere). Login accepts an optional
+  `totp` field; a missing code returns `totp_required`, a wrong code a
+  generic 401. Admin `#/security` runs the whole flow; the login page
+  prompts for the code when required.
+- **Session hardening** (`src/modules/auth/service.ts`). Sessions
+  already stored only SHA-256 token hashes; M9 adds an idle timeout
+  (`wl_session_idle_hours`, default 24 h — a session idle longer is
+  revoked on next use; `last_seen_at` refreshes at most once every 5
+  minutes), `GET /api/auth/sessions` (no token values ever shown) and
+  `POST /api/auth/sessions/revoke-all`.
+- **Upload hardening** (`src/modules/security/magic.ts`). The M3
+  allowlist (jpeg/png/gif/webp/avif/svg/pdf, 10 MB) plus magic-byte
+  sniffing on the first bytes of every upload — a PHP file renamed to
+  `.jpg` is rejected, and SVGs are checked for scripts, `javascript:`
+  URLs and event handlers. Wired into `uploadMedia`, so the compat
+  `media_handle_upload` path gets it too.
+- **Admin Security page** (`admin/src/pages/Security.tsx`, `#/security`).
+  Header status, lockout config + locked keys, 2FA status per admin,
+  active sessions, recent failed logins (from the audit log), and a
+  warning when a user with the default login name `admin` exists.
+- **Agents wired to real checks** (`src/ai/agents/analysis.ts`). The
+  security-scanner now runs the real checks (headers policy, lockout
+  state, 2FA per admin, upload allowlist, default `admin` login name)
+  and the performance-analyst measures real D1/R2 numbers (post and
+  revision counts, media bytes, R2 object count, content sizes, cache
+  config, derivative status). Cache hit rates are **not** observable
+  from inside the Worker, so neither agent invents one. The
+  backup-advisor reports the real backup registry; the
+  migration-assistant points at the real importer. Tested: both agents'
+  outputs match direct queries.
+- **Performance** (`src/modules/performance/`). Anonymous public GETs
+  are cached 60 s with `stale-while-revalidate=60`; publishing (or
+  changing) a post purges its URL, the home page and its term pages
+  from the Cache API (purge failures never fail the publish; tested
+  with a fake Cache). Image derivatives via the Cloudflare Images
+  binding (`IMAGES`, commented in `wrangler.toml` with setup notes):
+  `GET /media/:key?width=&format=` serves a resized/WebP variant and
+  stores it in R2 + `wl_media_derivatives` for `srcset`; when the
+  binding is absent the endpoint serves the original and says so
+  (`X-Wordless-Derivatives: unavailable`) — a resize is never faked.
+  The media page reports derivative status honestly. Compression is
+  the Cloudflare edge's job (gzip/brotli); the Worker sets `Vary:
+  Accept-Encoding` and documents the split. Site Health gains a
+  performance section with measured numbers.
+- **Backup + restore** (`src/modules/backup/service.ts`). `POST
+  /api/backup/create` (admin, `wl_jobs` job) writes a real ZIP
+  (`fflate`) to R2 `backups/<id>.zip`: one JSON file per D1 table, a
+  media manifest (R2 keys + sizes + etags), and a manifest with a
+  SHA-256 checksum per file. `GET /api/backup` (list with size,
+  checksum, verified flag), `GET /api/backup/:id/download`, `POST
+  /api/backup/:id/verify` (re-reads the bundle, recomputes every
+  checksum — only then is a backup marked verified), `POST
+  /api/backup/:id/restore` (requires the typed confirmation `RESTORE`,
+  refuses a failed verification and a different minor version,
+  restores tables in dependency order inside batched transactions, and
+  checks the media manifest key-by-key — missing keys are reported,
+  never silently skipped). Retention keeps the 10 most recent backups
+  (option `wl_backup_retention`). Admin `#/backup` runs the whole flow.
+  `wl_backups` and `wl_jobs` are excluded from backups by design.
+- **WordPress importer** (`src/modules/importer/`). `POST
+  /api/import/wxr` (multipart, ≤10 MB, `wl_jobs` job) parses WXR with
+  a real XML parser (`fast-xml-parser` — never regex): authors, categories/tags,
+  posts/pages (block content verbatim), comments, attachments (URL
+  fetch → R2; failed fetches recorded per item). `POST /api/import/sql`
+  parses mysqldump files for the 12 `wp_*` tables only (other tables
+  reported as ignored). PHP-serialized values become JSON via a safe
+  unserializer that **refuses objects and references** (never `eval`).
+  WordPress phpass hashes are not portable: every imported user gets
+  an empty password + the forced-reset flag and cannot log in until an
+  administrator resets the password. Original IDs are kept when free,
+  so relationships survive; revisions are skipped. Every item lands in
+  a per-item report (imported / skipped / failed with a reason).
+  Synthetic fixtures in `test/fixtures/wordpress/` (WXR + SQL dump,
+  generated by `scripts/generate-wp-fixture.mjs` from the WordPress
+  7.1.5 schema) prove the round-trip in tests. Admin `#/import` uploads
+  either format, shows job progress and the per-item report, and links
+  the fixtures. Full docs: `docs/import/wordpress-import.md`.
+- **Compat registry:** separate `SECURITY_COMPAT` (7),
+  `PERFORMANCE_COMPAT` (3), `BACKUP_COMPAT` (3) and `IMPORT_COMPAT`
+  (3) lists — Wordless-native surfaces, deliberately not in
+  `WORDPRESS_COMPAT`.
+- **Migration `0009_m9.sql` was needed** (additive only):
+  `wl_login_attempts`, `wl_backups`, `wl_media_derivatives`, plus a
+  nullable `last_seen_at` column on `wl_sessions`. Existing local D1
+  databases need `npx wrangler d1 migrations apply DB --local` before
+  the M9 routes work. `Db` gained a `batch()` method (atomic where the
+  platform supports it — D1 batch, node:sqlite transaction) for the
+  restore.
+- 375 tests, all passing (4 skipped — the M4 emitter skips); `tsc --noEmit`
+  clean for the worker and the admin under `strict`.
+
+## What Milestone 9 is not
+
+- **Not live Cloudflare Images.** The derivatives service is
+  implemented against the documented Images binding API, but no live
+  call has been made — no account is connected. Until the binding is
+  enabled and a real resize is observed, derivatives are "implemented,
+  not verified" and the endpoint honestly serves originals.
+- **Not real-user performance measurement.** No Core Web Vitals /
+  real-user timing is collected; the performance numbers are D1/R2
+  counts and configuration, and cache hit rates are not observable
+  from inside the Worker.
+- **Not a security audit.** The lockout, TOTP and header checks are
+  implemented and tested, but no external penetration test or audit
+  has been run; the CSP still allows `unsafe-inline` (documented).
+- **Not a WordPress migration guarantee.** The importer covers the 12
+  core tables and WXR; multisite tables, plugin tables, uploads binary
+  blobs and serialized PHP objects are not imported (see
+  `docs/import/wordpress-import.md`). Converted plugins still go
+  through the M4 conversion engine.
+- **Not pattern rendering.** Block themes built from `wp:pattern`
+  blocks (e.g. Twenty Twenty-Five) still render nearly empty — the
+  M5 known gap, unchanged.
+- **Not production readiness.** The installer polish, deploy scripts,
+  release management and final audit are Milestone 10.
 
 ## What Milestone 3 is
 

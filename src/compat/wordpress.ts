@@ -435,4 +435,39 @@ export const INTEGRATIONS_COMPAT: CompatEntry[] = [
   { name: "wl_integrations_marketplace", level: "partial", description: "GET /api/marketplace + POST /api/marketplace/install (ZIP upload, wordless.json manifest, ≤2 MB / ≤100 files) + activate/deactivate. Local-ZIP skeleton only — no remote directory, and installed code is never executed by the install." },
 ];
 
+/**
+ * Wordless security + performance surface (Milestone 9) — NOT WordPress
+ * functions, so they live in separate lists. "partial" means the endpoint
+ * exists and works, with the documented M9 limits (no live Cloudflare
+ * Images call has been verified here — no account connected; no real
+ * Core Web Vitals measurement; compression is the edge's job).
+ */
+export const SECURITY_COMPAT: CompatEntry[] = [
+  { name: "wl_security_headers", level: "partial", description: "Every response carries Content-Security-Policy, X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy and Permissions-Policy. The CSP allows the inline styles/scripts the admin and analytics need (documented in docs/security/security.md); a nonce-based policy is a later step." },
+  { name: "wl_security_lockout", level: "partial", description: "POST /api/auth/login is guarded: 5 failed attempts in 15 minutes lock a login name/IP for 15 minutes (doubling on consecutive lockouts, capped at 60); a successful login clears the counter. Thresholds are options (wl_security_max_attempts / wl_security_window_minutes / wl_security_lockout_minutes)." },
+  { name: "wl_security_2fa", level: "partial", description: "POST /api/auth/2fa/setup|confirm|disable + GET /api/auth/2fa/status — TOTP (RFC 6238, HMAC-SHA1, 30 s steps, ±1 step skew) with 8 one-time hashed recovery codes. The secret is stored only after a valid code confirms setup; login accepts an optional totp field." },
+  { name: "wl_security_sessions", level: "partial", description: "GET /api/auth/sessions + POST /api/auth/sessions/revoke-all — idle timeout (wl_session_idle_hours, default 24 h) enforced on verify; sessions are listed without token values." },
+  { name: "wl_security_uploads", level: "partial", description: "Uploads keep the M3 allowlist (jpeg/png/gif/webp/avif/svg/pdf, 10 MB) and add magic-byte sniffing — a PHP file renamed to .jpg is rejected; SVGs are checked for scripts and javascript: URLs." },
+  { name: "wl_security_overview", level: "partial", description: "GET /api/security/overview — measured posture: headers policy, lockout config + locked keys, 2FA per admin, active sessions, recent failed logins, and whether a user with the default login name \"admin\" exists (login name only — passwords are never tested)." },
+  { name: "wl_security_agents", level: "partial", description: "The M6 security-scanner agent now runs the real checks above and the performance-analyst measures real D1/R2 numbers; the backup-advisor reports the real backup registry and the migration-assistant points at the real M9 importer." },
+];
+
+export const PERFORMANCE_COMPAT: CompatEntry[] = [
+  { name: "wl_performance_cache", level: "partial", description: "Anonymous public GETs are cached 60 s with stale-while-revalidate=60; publishing a post purges its URL, the home page and its term pages from the Cache API (purge failures never fail the publish). Cache hit rates are not observable from inside the Worker and are not reported." },
+  { name: "wl_performance_derivatives", level: "partial", description: "GET /media/:key?width=&format= — resized/WebP variants via the Cloudflare Images binding when bound (stored in R2 + wl_media_derivatives for srcset); when unbound the endpoint serves the original and says so (X-Wordless-Derivatives: unavailable). A resize is never faked." },
+  { name: "wl_performance_health", level: "partial", description: "The Site Health response carries a performance section with measured numbers: D1 row counts, R2 object count (capped at 1,000, reported as 'at least'), cache config and derivative status. Compression is applied by the Cloudflare edge, not the Worker." },
+];
+
+export const BACKUP_COMPAT: CompatEntry[] = [
+  { name: "wl_backup_create", level: "partial", description: "POST /api/backup/create (admin, wl_jobs job) — a real ZIP in R2 (backups/<id>.zip): one JSON file per D1 table, a media manifest (R2 keys + sizes + etags), and a manifest with a SHA-256 checksum per file. wl_backups and wl_jobs are excluded by design." },
+  { name: "wl_backup_verify", level: "partial", description: "POST /api/backup/:id/verify — re-reads the bundle from R2 and recomputes every checksum; only then is the backup marked verified. GET /api/backup lists with size, checksum and verified flag." },
+  { name: "wl_backup_restore", level: "partial", description: "POST /api/backup/:id/restore — requires the typed confirmation \"RESTORE\" and a passing verification, refuses a different minor version, restores tables in dependency order inside batched transactions, and checks the media manifest key-by-key (missing keys are reported, never silently skipped). GET /api/backup/:id/download serves the ZIP." },
+];
+
+export const IMPORT_COMPAT: CompatEntry[] = [
+  { name: "wl_import_wxr", level: "partial", description: "POST /api/import/wxr (admin, multipart ≤10 MB, wl_jobs job) — WordPress eXtended RSS via a real XML parser: authors (forced password reset), categories/tags, posts/pages (block content verbatim), comments, attachments (URL fetch → R2; failed fetches recorded per item). Per-item report with imported/skipped/failed counts." },
+  { name: "wl_import_sql", level: "partial", description: "POST /api/import/sql (admin, ≤10 MB, wl_jobs job) — mysqldump parsing for the 12 wp_* tables only (other tables reported as ignored). PHP-serialized values become JSON via the safe unserializer; serialized objects are refused and recorded. Original IDs are kept when free; revisions are skipped." },
+  { name: "wl_import_fixtures", level: "partial", description: "test/fixtures/wordpress/ carries a synthetic WXR export + SQL dump (posts/pages/terms/comments/users/options, serialized values, a refused object payload, a revision, a non-wp_* table) that the importer is proven against in tests; the admin Import page links to both files." },
+];
+
 export type { Role };

@@ -581,3 +581,96 @@ export interface MarketplaceExtension {
   createdAt: string;
   updatedAt: string;
 }
+
+/* Milestone 9 types — security, backup, importer, derivatives. */
+
+export interface SecurityOverview {
+  headers: { policy: string; applied: boolean };
+  lockout: {
+    config: { maxAttempts: number; windowMinutes: number; lockoutMinutes: number };
+    lockedKeys: Array<{ key: string; attempts: number; lockedUntil: string; lockoutCount: number }>;
+  };
+  twoFactor: Array<{ userId: number; login: string; role: string; enabled: boolean }>;
+  sessions: { active: number };
+  failedLogins: Array<{ userId: number; createdAt: string; details: string | null }>;
+  defaultAdminLoginExists: boolean;
+}
+
+export interface SessionView {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  lastSeenAt: string | null;
+  userAgent: string | null;
+  ipHashPrefix: string | null;
+  revoked: boolean;
+  current: boolean;
+}
+
+export interface TotpSetup {
+  secret: string;
+  url: string;
+}
+
+export interface BackupRow {
+  id: string;
+  filename: string;
+  size: number;
+  checksum: string;
+  tables: Record<string, number>;
+  mediaCount: number;
+  mediaMissing: number;
+  verified: boolean;
+  verifiedAt: string | null;
+  createdAt: string;
+}
+
+export interface BackupVerifyReport {
+  backupId: string;
+  ok: boolean;
+  files: Array<{ file: string; expected: string; actual: string | null; ok: boolean }>;
+  verifiedAt: string;
+}
+
+export interface BackupJobResult {
+  id: string;
+  status: string;
+  result: BackupRow | { error: string } | null;
+}
+
+export interface ImportReportItem {
+  type: string;
+  sourceId: string;
+  targetId: number | null;
+  status: "imported" | "skipped" | "failed";
+  reason?: string;
+}
+
+export interface ImportReport {
+  kind: "wxr" | "sql";
+  source: string;
+  counts: {
+    imported: number;
+    skipped: number;
+    failed: number;
+    byType: Record<string, { imported: number; skipped: number; failed: number }>;
+  };
+  items: ImportReportItem[];
+  ignoredTables?: string[];
+  finishedAt: string;
+}
+
+export interface ImportJobResult {
+  id: string;
+  kind: string;
+  status: string;
+  result: ImportReport | { error: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DerivativeStatus {
+  bound: boolean;
+  stored: number;
+  widths: number[];
+}

@@ -1,5 +1,5 @@
 /** Worker environment bindings (see wrangler.toml). No secrets here. */
-import type { D1Database, Fetcher, KVNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, Fetcher, ImagesBinding, KVNamespace, R2Bucket } from "@cloudflare/workers-types";
 import type { AiBinding } from "./ai/providers/types";
 import type { User } from "./modules/users/types";
 
@@ -16,6 +16,15 @@ export interface Env {
    * a missing binding as "not configured", never as a crash.
    */
   AI?: AiBinding;
+  /**
+   * Cloudflare Images binding (Milestone 9, image derivatives).
+   * OPTIONAL: it only exists when the `[images]` block in wrangler.toml
+   * is uncommented and the Worker is deployed to Cloudflare. When the
+   * binding is absent, `GET /media/:key?width=&format=` serves the
+   * original and the admin media page says derivatives are unavailable
+   * — a resize is never faked.
+   */
+  IMAGES?: ImagesBinding;
   /** OpenAI-compatible fallback only (optional secret, `wrangler secret put`). */
   OPENAI_API_KEY?: string;
   /** OpenAI-compatible base URL (optional; default https://api.openai.com/v1). */
